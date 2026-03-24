@@ -16,7 +16,9 @@ Capitalos is a single Vite + React + TypeScript wealth management web app with V
 
 ### Authentication
 
-All routes except `/login` require Firebase Auth. The app connects to a live Firebase project (`capitalos-a24f7`). To test authenticated flows, you need a valid Firebase user account (email/password or Google). Without credentials, you can still verify the login page renders, route protection works, and smoke tests pass.
+All routes except `/login` require Firebase Auth. The app connects to a live Firebase project (`capitalos-a24f7`). To test authenticated flows, you need a valid Firebase user account with **email/password sign-in enabled** (not Google-only). The test account must have email/password as an auth provider in the Firebase console — a Google-only account will return `INVALID_LOGIN_CREDENTIALS` when using `signInWithEmailAndPassword`. Google OAuth sign-in requires completing 2FA in the browser, which is not automatable.
+
+Without working credentials, you can still verify: login page rendering, route protection (unauthenticated redirects), smoke E2E tests, build, and lint.
 
 ### Serverless API functions
 
