@@ -1,27 +1,8 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
-import { initializeApp, getApps, cert } from 'firebase-admin/app'
-import { getAuth } from 'firebase-admin/auth'
-import { getFirestore } from 'firebase-admin/firestore'
+import { initializeAdmin, verifyAuth, getDb } from '../_lib/firebaseAdmin.js'
 
-let _adminInitialized = false
-function initializeAdmin(): void {
-  if (_adminInitialized || getApps().length > 0) { _adminInitialized = true; return }
-  try {
-    const sa = process.env.FIREBASE_SERVICE_ACCOUNT
-    if (sa) { initializeApp({ credential: cert(JSON.parse(sa)) }) }
-    else { initializeApp() }
-    _adminInitialized = true
-  } catch (e) {
-    if (e instanceof Error && e.message.includes('already exists')) { _adminInitialized = true; return }
-    throw e
-  }
-}
-
-async function verifyAuth(req: VercelRequest, res: VercelResponse): Promise<string | null> {
-  const h = req.headers.authorization
-  if (!h?.startsWith('Bearer ')) { res.status(401).json({ error: 'Missing or invalid Authorization header.' }); return null }
-  try { return (await getAuth().verifyIdToken(h.slice(7))).uid }
-  catch { res.status(401).json({ error: 'Invalid or expired authentication token.' }); return null }
+export const config = {
+  maxDuration: 60,
 }
 
 interface PerpetualsOpenPosition {
@@ -987,7 +968,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // The wallet address is loaded from the authenticated user's own settings
     // rather than trusted from the request body. This prevents an authenticated
     // user from using this endpoint to enumerate arbitrary wallets.
-    const settingsSnap = await getFirestore()
+    const settingsSnap = await getDb()
       .collection('users')
       .doc(uid)
       .collection('settings')

@@ -1,7 +1,5 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
-import { initializeApp, getApps, cert } from 'firebase-admin/app'
-import { getAuth } from 'firebase-admin/auth'
-import { getFirestore, type Firestore } from 'firebase-admin/firestore'
+import { initializeAdmin, verifyAuth, getDb, getAuthAdmin, type Firestore } from '../_lib/firebaseAdmin.js'
 import { timingSafeEqual } from 'crypto'
 import type { NetWorthSummary, NetWorthItem, NetWorthCategory, NetWorthTransaction } from '../../lib/types.js'
 import { NetWorthCalculationService } from '../../lib/netWorthCalculation.js'
@@ -14,25 +12,8 @@ export const config = {
   maxDuration: 60,
 }
 
-let _adminInitialized = false
-function initializeAdmin(): void {
-  if (_adminInitialized || getApps().length > 0) { _adminInitialized = true; return }
-  try {
-    const sa = process.env.FIREBASE_SERVICE_ACCOUNT
-    if (sa) { initializeApp({ credential: cert(JSON.parse(sa)) }) }
-    else { initializeApp() }
-    _adminInitialized = true
-  } catch (e) {
-    if (e instanceof Error && e.message.includes('already exists')) { _adminInitialized = true; return }
-    throw e
-  }
-}
-
 async function verifyFirebaseAuth(req: VercelRequest, res: VercelResponse): Promise<string | null> {
-  const h = req.headers.authorization
-  if (!h?.startsWith('Bearer ')) { res.status(401).json({ error: 'Missing or invalid Authorization header.' }); return null }
-  try { return (await getAuth().verifyIdToken(h.slice(7))).uid }
-  catch { res.status(401).json({ error: 'Invalid or expired authentication token.' }); return null }
+  return verifyAuth(req, res)
 }
 
 function safeStringEquals(a: string, b: string): boolean {
@@ -294,7 +275,7 @@ async function getAllUserUids(): Promise<string[]> {
   const uids: string[] = []
   let pageToken: string | undefined
   do {
-    const result = await getAuth().listUsers(1000, pageToken)
+    const result = await getAuthAdmin().listUsers(1000, pageToken)
     uids.push(...result.users.map(u => u.uid))
     pageToken = result.pageToken
   } while (pageToken)
@@ -308,7 +289,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   try {
     initializeAdmin()
-    const db = getFirestore()
+    const db = getDb()
 
     // GET = Vercel cron: create snapshots for all users
     if (req.method === 'GET') {

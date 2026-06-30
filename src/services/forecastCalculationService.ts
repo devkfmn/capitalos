@@ -1,4 +1,4 @@
-import type { ForecastEntry } from './forecastService'
+import type { ForecastEntry } from './storageService'
 import type { NetWorthItem, NetWorthTransaction } from '../pages/NetWorth'
 import type { InflowItem, OutflowItem } from '../pages/Cashflow'
 import { calculateBalanceChf } from './balanceCalculationService'
