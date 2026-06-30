@@ -276,8 +276,33 @@ function NetWorthCategorySection({
   // subtotal is already in CHF (base currency) for every category.
   const subtotalInBaseCurrency = subtotal
 
-  // Derive the USD figure from the CHF subtotal so it matches the per-row USD values.
-  const subtotalInUsd = subtotal * (exchangeRates?.rates['USD'] || 1)
+  // CHF -> USD: prefer the live crypto/perpetuals rate (inverse of usdToChfRate),
+  // fall back to the exchange-rate table — same logic as total net worth / Dashboard.
+  const chfToUsdRate =
+    usdToChfRate && usdToChfRate > 0
+      ? 1 / usdToChfRate
+      : exchangeRates?.rates['USD'] && exchangeRates.rates['USD'] > 0
+        ? exchangeRates.rates['USD']
+        : null
+
+  // Perpetuals rows show native USD exchange balances; sum those directly so the
+  // header USD matches the rows. Other categories derive USD from the CHF subtotal.
+  const subtotalInUsd =
+    category === 'Perpetuals'
+      ? items
+          .filter((item) => item.category === 'Perpetuals')
+          .reduce((sum, item) => {
+            const exchangeBalance = item.perpetualsData?.exchangeBalance
+            if (!Array.isArray(exchangeBalance)) return sum
+            const holdingsUsd = exchangeBalance.reduce(
+              (s, b) => s + (typeof b?.holdings === 'number' ? b.holdings : 0),
+              0
+            )
+            return sum + holdingsUsd
+          }, 0)
+      : chfToUsdRate !== null
+        ? subtotal * chfToUsdRate
+        : 0
 
   return (
     <div className="bg-bg-frame border border-border-subtle rounded-card shadow-card px-3 py-3 lg:p-6 overflow-hidden">
