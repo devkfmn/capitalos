@@ -24,6 +24,37 @@ async function verifyAuth(req: VercelRequest, res: VercelResponse): Promise<stri
 
 export const config = { maxDuration: 30 }
 
+// Abuse protection: cap symbols per request and apply a best-effort per-uid
+// rate limit. The limiter is in-memory and therefore per-instance only (it
+// resets on cold start and is not shared across regions), but it meaningfully
+// throttles a single client hammering this Yahoo proxy.
+const MAX_SYMBOLS_PER_REQUEST = 100
+const RATE_LIMIT_WINDOW_MS = 60_000
+const RATE_LIMIT_MAX_REQUESTS = 30
+
+const rateLimitBuckets = new Map<string, number[]>()
+
+function isRateLimited(uid: string): boolean {
+  const now = Date.now()
+  const windowStart = now - RATE_LIMIT_WINDOW_MS
+  const recent = (rateLimitBuckets.get(uid) || []).filter(ts => ts > windowStart)
+  if (recent.length >= RATE_LIMIT_MAX_REQUESTS) {
+    rateLimitBuckets.set(uid, recent)
+    return true
+  }
+  recent.push(now)
+  rateLimitBuckets.set(uid, recent)
+  // Opportunistic cleanup to bound memory growth across many uids.
+  if (rateLimitBuckets.size > 5000) {
+    for (const [key, timestamps] of rateLimitBuckets) {
+      const stillValid = timestamps.filter(ts => ts > windowStart)
+      if (stillValid.length === 0) rateLimitBuckets.delete(key)
+      else rateLimitBuckets.set(key, stillValid)
+    }
+  }
+  return false
+}
+
 function normalizeSymbolKey(raw: string): string {
   return raw.trim().toUpperCase().replace(/\s+/g, ' ')
 }
@@ -109,10 +140,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const uid = await verifyAuth(req, res)
     if (!uid) return
 
+    if (isRateLimited(uid)) {
+      return res.status(429).json({ error: 'Too many requests. Please slow down and try again shortly.' })
+    }
+
     const { symbols } = req.body as { symbols?: string[] }
 
     if (!symbols || !Array.isArray(symbols) || symbols.length === 0) {
       return res.status(400).json({ error: 'Symbols array is required' })
+    }
+    if (symbols.length > MAX_SYMBOLS_PER_REQUEST) {
+      return res.status(400).json({ error: `Too many symbols. Maximum ${MAX_SYMBOLS_PER_REQUEST} per request.` })
     }
     if (!symbols.every(s => typeof s === 'string' && s.length > 0)) {
       return res.status(400).json({ error: 'All symbols must be non-empty strings' })

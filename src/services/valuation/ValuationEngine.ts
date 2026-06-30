@@ -128,13 +128,14 @@ export async function computeValuation(
       const currentPriceUsd = cryptoPricesMap[ticker] || 0
       currentPrice = currentPriceUsd
 
-      if (currentPriceUsd > 0 && usdToChfRate !== null && usdToChfRate > 0) {
+      if (currentPriceUsd > 0) {
+        // Live crypto price is in USD -> convert to CHF
         const valueUsd = coinAmount * currentPriceUsd
-        valueChf = valueUsd * usdToChfRate
+        valueChf = usdToChfRate !== null && usdToChfRate > 0 ? valueUsd * usdToChfRate : convert(valueUsd, 'USD')
       } else {
-        // Fallback: use calculateBalanceChf
-        const balanceUsd = calculateBalanceChf(item.id, transactions, item, cryptoPricesMap, convert)
-        valueChf = usdToChfRate && usdToChfRate > 0 ? balanceUsd * usdToChfRate : convert(balanceUsd, 'USD')
+        // No live price: calculateBalanceChf returns CHF (base currency) from transactions.
+        // Do NOT multiply by usdToChfRate again (that double-converted the value down).
+        valueChf = calculateBalanceChf(item.id, transactions, item, cryptoPricesMap, convert)
       }
     } else if (item.category === 'Perpetuals') {
       // Perpetuals: calculate from exchange balance

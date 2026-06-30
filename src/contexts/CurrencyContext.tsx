@@ -11,6 +11,10 @@ interface CurrencyContextType {
   setBaseCurrency: (currency: CurrencyCode) => Promise<void>
   isLoading: boolean
   error?: string
+  // True only when exchange rates for the current base currency are loaded and usable.
+  // Use this to avoid rendering converted totals/amounts while rates are loading or
+  // unavailable (otherwise foreign amounts pass through unconverted and look wrong).
+  ratesReady: boolean
 }
 
 const CurrencyContext = createContext<CurrencyContextType | undefined>(undefined)
@@ -197,6 +201,9 @@ function CurrencyProviderInner({ children }: CurrencyProviderProps) {
     return amount / rate
   }, [exchangeRates, baseCurrency])
 
+  // Rates are usable only when loaded for the current base currency.
+  const ratesReady = !!exchangeRates && exchangeRates.base === baseCurrency
+
   return (
     <CurrencyContext.Provider
       value={{
@@ -206,6 +213,7 @@ function CurrencyProviderInner({ children }: CurrencyProviderProps) {
         setBaseCurrency,
         isLoading,
         error,
+        ratesReady,
       }}
     >
       {children}

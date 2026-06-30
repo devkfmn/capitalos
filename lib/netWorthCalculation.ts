@@ -51,17 +51,14 @@ export class NetWorthCalculationService {
         const coinAmount = calculateCoinAmount(item.id, transactions)
         const ticker = (item.name || '').trim().toUpperCase()
         const currentPriceUsd = cryptoPrices[ticker] || 0
-        if (currentPriceUsd > 0 && usdToChfRate !== null && usdToChfRate > 0) {
+        if (currentPriceUsd > 0) {
+          // Live crypto price is in USD -> convert to CHF
           const valueUsd = coinAmount * currentPriceUsd
-          balance = valueUsd * usdToChfRate
+          balance = usdToChfRate !== null && usdToChfRate > 0 ? valueUsd * usdToChfRate : convert(valueUsd, 'USD')
         } else {
-          // Fallback: calculateBalanceChf returns USD for crypto, need to convert to CHF
-          const balanceUsd = calculateBalanceChf(item.id, transactions, item, cryptoPrices, convert)
-          if (usdToChfRate && usdToChfRate > 0) {
-            balance = balanceUsd * usdToChfRate
-          } else {
-            balance = convert(balanceUsd, 'USD')
-          }
+          // No live price: calculateBalanceChf returns CHF (base currency) from transactions.
+          // Do NOT multiply by usdToChfRate again (that double-converted the value down).
+          balance = calculateBalanceChf(item.id, transactions, item, cryptoPrices, convert)
         }
       } else if (item.category === 'Perpetuals') {
         // For Perpetuals: calculate only from Exchange Balance (Open Positions are displayed but not included in total)

@@ -198,22 +198,24 @@ function NetWorthCategorySection({
   const formatCurrency = (value: number) => formatMoney(value, baseCurrency, 'ch', { incognito: isIncognito })
   const formatUsd = (value: number) => formatMoney(value, 'USD', 'ch', { incognito: isIncognito })
   
-  // Calculate subtotal - Crypto always in USD, others use baseCurrency
+  // Calculate subtotal in CHF (base currency) for every category, so the subtotal
+  // always equals the sum of the per-item CHF values rendered in the rows below.
   const subtotal = items.reduce((sum, item) => {
     if (category === 'Crypto') {
-      // For Crypto: coin amount * current price (always in USD)
       const coinAmount = calculateCoinAmount(item.id, transactions)
       const ticker = item.name.trim().toUpperCase()
       const currentPriceUsd = cryptoPrices[ticker] || 0
+      let valueChf: number
       if (currentPriceUsd > 0) {
-        // Crypto is always USD, no conversion
-        return sum + (coinAmount * currentPriceUsd)
+        // Live crypto price is in USD -> convert to CHF
+        const valueUsd = coinAmount * currentPriceUsd
+        valueChf = usdToChfRate && usdToChfRate > 0 ? valueUsd * usdToChfRate : convert(valueUsd, 'USD')
+      } else {
+        // No live price: transaction-based calculation already returns CHF (base currency).
+        // Do NOT multiply by usdToChfRate again (that double-converted the value down).
+        valueChf = calculateBalanceChf(item.id, transactions, item, cryptoPrices, convert)
       }
-      // Fallback to transaction-based if price not available
-      // For crypto fallback, calculateBalanceChf returns USD (not CHF!)
-      const balanceUsd = calculateBalanceChf(item.id, transactions, item, cryptoPrices, convert)
-      // balanceUsd is already in USD, so use it directly for the subtotal
-      return sum + (isNaN(balanceUsd) || !isFinite(balanceUsd) ? 0 : balanceUsd)
+      return sum + (isNaN(valueChf) || !isFinite(valueChf) ? 0 : valueChf)
     }
     if (category === 'Perpetuals') {
       // For Perpetuals: calculate only from Exchange Balance
@@ -271,23 +273,11 @@ function NetWorthCategorySection({
     return sum + (isNaN(balanceChf) || !isFinite(balanceChf) ? 0 : balanceChf)
   }, 0)
   
-  // For Crypto, also calculate the subtotal in baseCurrency
-  // For non-Crypto, subtotal is already in baseCurrency
-  // Use usdToChfRate (from CryptoCompare) to match Dashboard calculation, fallback to convert if not available
-  const subtotalInBaseCurrency = category === 'Crypto' 
-    ? (usdToChfRate && usdToChfRate > 0 ? subtotal * usdToChfRate : convert(subtotal, 'USD'))
-    : (category === 'Perpetuals'
-      ? subtotal  // subtotal is already in CHF for Perpetuals
-      : subtotal)
-  
-  // Calculate USD value for all categories
-  // For Crypto, subtotal is already in USD
-  // For non-Crypto, convert from baseCurrency (CHF) to USD using exchange rate
-  const subtotalInUsd = category === 'Crypto' 
-    ? subtotal 
-    : (category === 'Perpetuals'
-      ? (usdToChfRate && usdToChfRate > 0 ? subtotal / usdToChfRate : (subtotal / (exchangeRates?.rates['USD'] || 1)))
-      : (subtotal * (exchangeRates?.rates['USD'] || 1)))
+  // subtotal is already in CHF (base currency) for every category.
+  const subtotalInBaseCurrency = subtotal
+
+  // Derive the USD figure from the CHF subtotal so it matches the per-row USD values.
+  const subtotalInUsd = subtotal * (exchangeRates?.rates['USD'] || 1)
 
   return (
     <div className="bg-bg-frame border border-border-subtle rounded-card shadow-card px-3 py-3 lg:p-6 overflow-hidden">
@@ -846,7 +836,7 @@ function ItemMenu({ itemId, onAddTransaction, onShowTransactions, onRemoveItem, 
 }
 
 function NetWorth() {
-  const { baseCurrency, convert, exchangeRates } = useCurrency()
+  const { baseCurrency, convert, exchangeRates, ratesReady } = useCurrency()
   const { uid } = useAuth()
   const { isIncognito } = useIncognito()
   const formatCurrency = (value: number) => formatMoney(value, baseCurrency, 'ch', { incognito: isIncognito })
@@ -854,7 +844,7 @@ function NetWorth() {
   const { toasts, addToast, dismissToast } = useToast()
   
   // Load data from DataContext (includes merged Perpetuals data)
-  const { data, loading: dataLoading } = useData()
+  const { data, loading: dataLoading, reloadFromFirestore } = useData()
   // Use local state for items/transactions that we can edit and save
   // Initialize from DataContext, but allow local updates
   const [netWorthItems, setNetWorthItems] = useState<NetWorthItem[]>([])
@@ -968,10 +958,19 @@ function NetWorth() {
     return result.totalNetWorthChf
   }, [netWorthItems, transactions, cryptoPrices, stockPrices, usdToChfRate, convert])
 
+  // Single source for CHF -> USD so this matches the Dashboard USD figure.
+  // Prefer the live USD->CHF rate (also used for crypto/perpetuals subtotals);
+  // fall back to the exchange-rate table. Null when no rate is available.
+  const chfToUsdRate = useMemo(() => {
+    if (usdToChfRate && usdToChfRate > 0) return 1 / usdToChfRate
+    const tableRate = exchangeRates?.rates['USD']
+    return tableRate && tableRate > 0 ? tableRate : null
+  }, [usdToChfRate, exchangeRates])
+
   // Calculate USD value for total net worth
   const totalNetWorthInUsd = useMemo(
-    () => totalNetWorth * (exchangeRates?.rates['USD'] || 1),
-    [totalNetWorth, exchangeRates]
+    () => (chfToUsdRate !== null ? totalNetWorth * chfToUsdRate : 0),
+    [totalNetWorth, chfToUsdRate]
   )
 
 
@@ -1001,6 +1000,7 @@ function NetWorth() {
       const result = await saveNetWorthItem(cleanedItem, uid)
       if (result.success && result.entries) {
         setNetWorthItems(result.entries as NetWorthItem[])
+        void reloadFromFirestore()
       } else if (!result.success) {
         console.error('[NetWorth] Failed to save new item:', result.reason)
         addToast('Failed to save changes. Please try again.')
@@ -1062,6 +1062,7 @@ function NetWorth() {
         const result = await saveNetWorthTransaction(cleanedTransaction, uid)
         if (result.success && result.entries) {
           setTransactions(result.entries as NetWorthTransaction[])
+          void reloadFromFirestore()
         } else if (!result.success) {
           console.error('[NetWorth] Failed to save new transaction:', result.reason)
           addToast('Failed to save changes. Please try again.')
@@ -1099,6 +1100,7 @@ function NetWorth() {
       const result = await saveNetWorthTransaction(cleanedTransaction, uid)
       if (result.success && result.entries) {
         setTransactions(result.entries as NetWorthTransaction[])
+        void reloadFromFirestore()
       } else if (!result.success) {
         console.error('[NetWorth] Failed to save transaction:', result.reason)
         addToast('Failed to save changes. Please try again.')
@@ -1138,6 +1140,7 @@ function NetWorth() {
       })
       if (result.success && result.entries) {
         setTransactions(result.entries as NetWorthTransaction[])
+        void reloadFromFirestore()
       } else if (!result.success) {
         console.error('[NetWorth] Failed to save updated transaction:', result.reason)
         addToast('Failed to save changes. Please try again.')
@@ -1161,6 +1164,7 @@ function NetWorth() {
       })
       if (result.success && result.entries) {
         setTransactions(result.entries)
+        void reloadFromFirestore()
       } else if (!result.success) {
         console.error('[NetWorth] Failed to delete transaction:', result.reason)
         addToast('Failed to save changes. Please try again.')
@@ -1210,6 +1214,7 @@ function NetWorth() {
         if (latestTransactions) {
           setTransactions(latestTransactions)
         }
+        void reloadFromFirestore()
       }
     }
   }
@@ -1256,6 +1261,7 @@ function NetWorth() {
       })
       if (result.success && result.entries) {
         setNetWorthItems(result.entries as NetWorthItem[])
+        void reloadFromFirestore()
       } else if (!result.success) {
         console.error('[NetWorth] Failed to save edited item:', result.reason)
         addToast('Failed to save changes. Please try again.')
@@ -1292,13 +1298,13 @@ function NetWorth() {
                 variant={totalNetWorth > 0 ? 'inflow' : totalNetWorth < 0 ? 'outflow' : 'neutral'}
                 className="block"
               >
-                {formatCurrency(totalNetWorth)}
+                {ratesReady ? formatCurrency(totalNetWorth) : '—'}
               </TotalText>
               <TotalText
                 variant={totalNetWorthInUsd > 0 ? 'inflow' : totalNetWorthInUsd < 0 ? 'outflow' : 'neutral'}
                 className="block"
               >
-                {formatUsd(totalNetWorthInUsd)}
+                {ratesReady ? formatUsd(totalNetWorthInUsd) : '—'}
               </TotalText>
             </div>
           </div>

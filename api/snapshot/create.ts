@@ -1,5 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
 import admin from 'firebase-admin'
+import { timingSafeEqual } from 'crypto'
 import type { NetWorthSummary, NetWorthItem, NetWorthCategory, NetWorthTransaction } from '../../lib/types.js'
 import { NetWorthCalculationService } from '../../lib/netWorthCalculation.js'
 import { fetchCryptoData } from '../../lib/cryptoCompare.js'
@@ -32,10 +33,21 @@ async function verifyFirebaseAuth(req: VercelRequest, res: VercelResponse): Prom
   catch { res.status(401).json({ error: 'Invalid or expired authentication token.' }); return null }
 }
 
+function safeStringEquals(a: string, b: string): boolean {
+  const bufA = Buffer.from(a)
+  const bufB = Buffer.from(b)
+  // timingSafeEqual requires equal-length buffers; the length check itself is
+  // not secret-dependent, so comparing lengths first is acceptable.
+  if (bufA.length !== bufB.length) return false
+  return timingSafeEqual(bufA, bufB)
+}
+
 function verifyCronSecret(req: VercelRequest): boolean {
+  const expected = process.env.CRON_SECRET
+  if (!expected) return false
   const h = req.headers.authorization
   if (!h?.startsWith('Bearer ')) return false
-  return h.slice(7) === process.env.CRON_SECRET
+  return safeStringEquals(h.slice(7), expected)
 }
 
 interface NetWorthSnapshot {

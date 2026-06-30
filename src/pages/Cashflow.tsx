@@ -6,6 +6,7 @@ import ToastContainer from '../components/ToastContainer'
 import TotalText from '../components/TotalText'
 import { useCurrency } from '../contexts/CurrencyContext'
 import { useAuth } from '../lib/dataSafety/authGateCompat'
+import { useData } from '../contexts/DataContext'
 import { useIncognito } from '../contexts/IncognitoContext'
 import { formatMoney, type CurrencyCode } from '../lib/currency'
 import { toDateSafe } from '../lib/firestoreSafeWrite'
@@ -116,7 +117,7 @@ interface SectionCardProps {
 }
 
 function SectionCard({ title, children, total, totalColor = 'success' }: SectionCardProps) {
-  const { baseCurrency } = useCurrency()
+  const { baseCurrency, ratesReady } = useCurrency()
   const { isIncognito } = useIncognito()
   const formatCurrency = (value: number) => formatMoney(value, baseCurrency, 'ch', { incognito: isIncognito })
   
@@ -130,7 +131,8 @@ function SectionCard({ title, children, total, totalColor = 'success' }: Section
             variant={totalColor === 'success' ? 'inflow' : 'outflow'}
             className="block mt-1"
           >
-            {formatCurrency(total)}
+            {/* Avoid showing unconverted/incorrect totals while exchange rates load */}
+            {ratesReady ? formatCurrency(total) : '—'}
           </TotalText>
         )}
       </div>
@@ -2044,6 +2046,7 @@ function Cashflow() {
   const formatCurrency = (value: number) => formatMoney(value, baseCurrency, 'ch', { incognito: isIncognito })
   const { uid } = useAuth()
   const { toasts, addToast, dismissToast } = useToast()
+  const { reloadFromFirestore } = useData()
   const [inflowItems, setInflowItems] = useState<InflowItem[]>([])
   const [outflowItems, setOutflowItems] = useState<OutflowItem[]>([])
   const [accountflowItems, setAccountflowItems] = useState<AccountflowItem[]>([])
@@ -2170,6 +2173,7 @@ function Cashflow() {
     const result = await saveCashflowInflowItem(newItem, uid)
     if (result.success && result.entries) {
       setInflowItems(result.entries as InflowItem[])
+      void reloadFromFirestore()
     } else if (!result.success) {
       console.error('[Cashflow] Failed to save new inflow item:', result.reason)
       addToast('Failed to save changes. Please try again.')
@@ -2191,6 +2195,7 @@ function Cashflow() {
     const result = await saveCashflowOutflowItem(newItem, uid)
     if (result.success && result.entries) {
       setOutflowItems(result.entries as OutflowItem[])
+      void reloadFromFirestore()
     } else if (!result.success) {
       console.error('[Cashflow] Failed to save new outflow item:', result.reason)
     }
@@ -2228,6 +2233,7 @@ function Cashflow() {
       const result = await saveCashflowInflowItem(updatedItem, uid, { clientUpdatedAt })
       if (result.success && result.entries) {
         setInflowItems(result.entries as InflowItem[])
+        void reloadFromFirestore()
       } else if (!result.success) {
         console.error('[Cashflow] Failed to save edited inflow item:', result.reason)
         addToast('Failed to save changes. Please try again.')
@@ -2253,6 +2259,7 @@ function Cashflow() {
       const result = await saveCashflowOutflowItem(updatedItem, uid, { clientUpdatedAt })
       if (result.success && result.entries) {
         setOutflowItems(result.entries as OutflowItem[])
+        void reloadFromFirestore()
       } else if (!result.success) {
         console.error('[Cashflow] Failed to save edited outflow item:', result.reason)
         addToast('Failed to save changes. Please try again.')
@@ -2272,6 +2279,7 @@ function Cashflow() {
       const result = await deleteCashflowInflowItem<InflowItem>(id, uid, { clientUpdatedAt })
       if (result.success && result.entries) {
         setInflowItems(result.entries)
+        void reloadFromFirestore()
       } else if (!result.success) {
         console.error('[Cashflow] Failed to delete inflow item:', result.reason)
         addToast('Failed to save changes. Please try again.')
@@ -2287,6 +2295,7 @@ function Cashflow() {
       const result = await deleteCashflowOutflowItem<OutflowItem>(id, uid, { clientUpdatedAt })
       if (result.success && result.entries) {
         setOutflowItems(result.entries)
+        void reloadFromFirestore()
       } else if (!result.success) {
         console.error('[Cashflow] Failed to delete outflow item:', result.reason)
         addToast('Failed to save changes. Please try again.')

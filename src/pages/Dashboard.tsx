@@ -201,7 +201,7 @@ function formatCHFTick(value: number): string {
 function Dashboard() {
   const [timeFrame, setTimeFrame] = useState<'YTD' | '6M' | '1Y' | '5Y' | 'MAX'>('MAX')
   const [windowWidth, setWindowWidth] = useState(window.innerWidth)
-  const { baseCurrency, convert, exchangeRates } = useCurrency()
+  const { baseCurrency, convert, exchangeRates, ratesReady } = useCurrency()
   const { toasts, addToast, dismissToast } = useToast()
 
   // Load data from DataContext (includes merged Perpetuals data)
@@ -353,20 +353,14 @@ function Dashboard() {
           const coinAmount = calculateCoinAmount(item.id, transactionsUpToDate)
           const ticker = item.name.trim().toUpperCase()
           const currentPriceUsd = cryptoPrices[ticker] || 0
-          if (currentPriceUsd > 0 && usdToChfRate !== null && usdToChfRate > 0) {
-            // valueUSD = holdings * currentPriceUSD, valueCHF = valueUSD * usdToChfRate
+          if (currentPriceUsd > 0) {
+            // Live crypto price is in USD -> convert to CHF
             const valueUsd = coinAmount * currentPriceUsd
-            balance = valueUsd * usdToChfRate
+            balance = usdToChfRate !== null && usdToChfRate > 0 ? valueUsd * usdToChfRate : convert(valueUsd, 'USD')
           } else {
-            // Fallback: calculateBalanceChf returns USD for crypto, need to convert to CHF
-            const balanceUsd = calculateBalanceChf(item.id, transactionsUpToDate, item, cryptoPrices, convert)
-            // Convert USD to CHF
-            if (usdToChfRate && usdToChfRate > 0) {
-              balance = balanceUsd * usdToChfRate
-            } else {
-              // Use convert function to convert USD to CHF (baseCurrency)
-              balance = convert(balanceUsd, 'USD')
-            }
+            // No live price: calculateBalanceChf returns CHF (base currency) from transactions.
+            // Do NOT multiply by usdToChfRate again (that double-converted the value down).
+            balance = calculateBalanceChf(item.id, transactionsUpToDate, item, cryptoPrices, convert)
           }
         } else if (item.category === 'Perpetuals') {
           // For Perpetuals: calculate from subcategories (convert each balance individually)
@@ -628,29 +622,38 @@ function Dashboard() {
   const monthlyPnLConverted = convert(monthlyPnLChf, 'CHF')
   const ytdPnLConverted = convert(ytdPnLChf, 'CHF')
 
+  // Single source for CHF -> USD so the USD figures here match the Net Worth page.
+  // Prefer the live USD->CHF rate (also used for crypto/perpetuals and Net Worth USD
+  // subtotals); fall back to the exchange-rate table. Null when no rate is available.
+  const chfToUsdRate = useMemo(() => {
+    if (usdToChfRate && usdToChfRate > 0) return 1 / usdToChfRate
+    const tableRate = exchangeRates?.rates['USD']
+    return tableRate && tableRate > 0 ? tableRate : null
+  }, [usdToChfRate, exchangeRates])
+
   // Calculate USD value for total net worth
   const totalNetWorthInUsd = useMemo(
-    () => totalNetWorthChf * (exchangeRates?.rates['USD'] || 1),
-    [totalNetWorthChf, exchangeRates]
+    () => (chfToUsdRate !== null ? totalNetWorthChf * chfToUsdRate : 0),
+    [totalNetWorthChf, chfToUsdRate]
   )
 
   // Calculate USD values for PnL
   const dailyPnLInUsd = useMemo(
-    () => dailyPnLChf !== null ? dailyPnLChf * (exchangeRates?.rates['USD'] || 1) : null,
-    [dailyPnLChf, exchangeRates]
+    () => (dailyPnLChf !== null && chfToUsdRate !== null ? dailyPnLChf * chfToUsdRate : null),
+    [dailyPnLChf, chfToUsdRate]
   )
   const weeklyPnLInUsd = useMemo(
-    () => (weeklyPnLChf !== null ? weeklyPnLChf * (exchangeRates?.rates['USD'] || 1) : null),
-    [weeklyPnLChf, exchangeRates]
+    () => (weeklyPnLChf !== null && chfToUsdRate !== null ? weeklyPnLChf * chfToUsdRate : null),
+    [weeklyPnLChf, chfToUsdRate]
   )
   const monthlyPnLInUsd = useMemo(
-    () => monthlyPnLChf * (exchangeRates?.rates['USD'] || 1),
-    [monthlyPnLChf, exchangeRates]
+    () => (chfToUsdRate !== null ? monthlyPnLChf * chfToUsdRate : 0),
+    [monthlyPnLChf, chfToUsdRate]
   )
 
   const ytdPnLInUsd = useMemo(
-    () => ytdPnLChf * (exchangeRates?.rates['USD'] || 1),
-    [ytdPnLChf, exchangeRates]
+    () => (chfToUsdRate !== null ? ytdPnLChf * chfToUsdRate : 0),
+    [ytdPnLChf, chfToUsdRate]
   )
 
   // Format currency helper
@@ -997,10 +1000,10 @@ function Dashboard() {
             </div>
             <div className="flex flex-col space-y-1">
               <TotalText variant={totalNetWorthConverted >= 0 ? 'inflow' : 'outflow'} className="text-[1.296rem] lg:text-[1.5525rem]">
-                {formatCurrencyValue(totalNetWorthConverted)}
+                {ratesReady ? formatCurrencyValue(totalNetWorthConverted) : '—'}
               </TotalText>
               <TotalText variant={totalNetWorthInUsd >= 0 ? 'inflow' : 'outflow'}>
-                {formatUsd(totalNetWorthInUsd)}
+                {ratesReady ? formatUsd(totalNetWorthInUsd) : '—'}
               </TotalText>
             </div>
           </div>

@@ -151,23 +151,15 @@ export async function getExchangeRates(base: CurrencyCode): Promise<ExchangeRate
       console.warn('Failed to read cached exchange rates as fallback:', cacheError)
     }
 
-    // If no cache and fetch fails, return a sensible fallback
-    const fallbackRates: Record<CurrencyCode, number> = {
-      CHF: 1,
-      EUR: 1,
-      USD: 1,
-    }
-    fallbackRates[base] = 1
-
+    // No live rates and no usable cache. Do NOT fabricate 1:1 rates here: returning
+    // all-equal rates makes USD/EUR amounts silently equal to CHF and produces wildly
+    // wrong totals. Surface the failure so callers can keep rates "not ready" and show
+    // a loading/unavailable state instead of incorrect converted numbers.
     if (isDev) {
-      console.warn('[getExchangeRates] returning hardcoded fallback:', { base })
+      console.warn('[getExchangeRates] no live rates and no cache; signalling unavailable:', { base })
     }
 
-    return {
-      base,
-      rates: fallbackRates,
-      fetchedAt: Date.now(),
-    }
+    throw error instanceof Error ? error : new Error('Exchange rates unavailable')
   }
 }
 

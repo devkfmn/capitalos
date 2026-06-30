@@ -41,7 +41,7 @@ function Settings() {
     setMexcSecretKey,
     isLoading: apiKeysLoading 
   } = useApiKeys()
-  const { data } = useData()
+  const { data, reloadFromFirestore } = useData()
   const [exportLoading, setExportLoading] = useState(false)
   const [exportError, setExportError] = useState<string | null>(null)
   const [exportSuccess, setExportSuccess] = useState(false)
@@ -505,6 +505,9 @@ function Settings() {
       // Add the new snapshot to the existing snapshots and save
       const updatedSnapshots = [...snapshots, newSnapshot]
       await saveSnapshots(updatedSnapshots, uid)
+
+      // Reflect the new snapshot in shared context so Dashboard chart/PnL update
+      void reloadFromFirestore()
 
       setSnapshotSuccess(true)
       setTimeout(() => setSnapshotSuccess(false), 5000)

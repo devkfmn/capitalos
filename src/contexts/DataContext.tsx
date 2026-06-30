@@ -43,6 +43,7 @@ interface DataContextType {
   refreshData: () => Promise<void>
   refreshPrices: () => Promise<void>
   refreshPerpetuals: () => Promise<void>
+  reloadFromFirestore: () => Promise<void>
 }
 
 const DataContext = createContext<DataContextType | undefined>(undefined)
@@ -525,6 +526,46 @@ export function DataProvider({ children }: DataProviderProps) {
     await loadAllData()
   }
 
+  // Lightweight reload of Firestore-backed collections only (no price/perpetuals API calls).
+  // Used after writes on Net Worth / Cashflow / Settings so other pages reading this
+  // context reflect the new data without a full page reload. Reuses the already-fetched
+  // prices, USD→CHF rate, and dynamically-merged Perpetuals items from current state.
+  const reloadFromFirestore = async () => {
+    if (!uid) return
+
+    try {
+      const firebaseData = await loadFirebaseData()
+
+      setData((prev) => {
+        // Preserve dynamically-created Perpetuals items (not stored in Firestore)
+        const perpItems = prev.netWorthItems.filter((i) => i.category === 'Perpetuals')
+        const freshItems = firebaseData.items.filter((i) => i.category !== 'Perpetuals')
+        const mergedItems = [...freshItems, ...perpItems]
+
+        const calculationResult = calculateTotals(
+          mergedItems,
+          firebaseData.transactions,
+          prev.cryptoPrices,
+          prev.stockPrices,
+          prev.usdToChfRate
+        )
+
+        return {
+          ...prev,
+          netWorthItems: mergedItems,
+          transactions: firebaseData.transactions,
+          inflowItems: firebaseData.inflowItems,
+          outflowItems: firebaseData.outflowItems,
+          snapshots: firebaseData.snapshots,
+          calculationResult,
+        }
+      })
+    } catch (err) {
+      console.error('[DataContext] reloadFromFirestore error:', err)
+      setError(err instanceof Error ? err.message : 'Failed to reload data')
+    }
+  }
+
   // Reset flag synchronously when uid changes (before regular useEffect runs)
   // useLayoutEffect runs synchronously after DOM mutations, before paint
   // This ensures AuthGate sees the correct state immediately when checking
@@ -560,8 +601,25 @@ export function DataProvider({ children }: DataProviderProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [uid]) // Reload when uid changes
 
-  // Note: convert function dependency is handled within calculateTotals
-  // We recalculate when data changes, not when convert changes, since convert is stable
+  // Recompute totals when the currency conversion function changes (e.g. exchange rates
+  // finish loading or change). Without this, totals computed during the initial load can
+  // stay frozen at pre-rate values (showing unconverted amounts) until the next data load.
+  useEffect(() => {
+    setData((prev) => {
+      if (prev.netWorthItems.length === 0 && prev.transactions.length === 0) {
+        return prev
+      }
+      const calculationResult = calculateTotals(
+        prev.netWorthItems,
+        prev.transactions,
+        prev.cryptoPrices,
+        prev.stockPrices,
+        prev.usdToChfRate
+      )
+      return { ...prev, calculationResult }
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [convert])
 
   // Unified refresh function: fetch exchange prices -> fetch crypto prices -> fetch perpetuals data -> update frontend
   const refreshAllData = async () => {
@@ -749,6 +807,7 @@ export function DataProvider({ children }: DataProviderProps) {
         refreshData,
         refreshPrices,
         refreshPerpetuals,
+        reloadFromFirestore,
       }}
     >
       {children}

@@ -982,11 +982,32 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const uid = await verifyAuth(req, res)
     if (!uid) return
 
-    const { walletAddress } = req.body as { walletAddress?: string }
+    // The wallet address is loaded from the authenticated user's own settings
+    // rather than trusted from the request body. This prevents an authenticated
+    // user from using this endpoint to enumerate arbitrary wallets.
+    const settingsSnap = await admin
+      .firestore()
+      .collection('users')
+      .doc(uid)
+      .collection('settings')
+      .doc('user')
+      .get()
+    const walletAddress = (settingsSnap.data()?.apiKeys?.hyperliquidWalletAddress || '') as string
 
     if (!walletAddress || typeof walletAddress !== 'string') {
-      return res.status(400).json({ 
-        error: 'Hyperliquid wallet address is required in request body and must be a string' 
+      return res.status(400).json({
+        error: 'No Hyperliquid wallet address is configured for this account.',
+      })
+    }
+
+    // If the client sends a wallet address, it must match the stored one.
+    const requestedWallet = (req.body as { walletAddress?: unknown })?.walletAddress
+    if (
+      typeof requestedWallet === 'string' &&
+      requestedWallet.trim().toLowerCase() !== walletAddress.trim().toLowerCase()
+    ) {
+      return res.status(403).json({
+        error: 'Requested wallet address does not match the configured account wallet.',
       })
     }
 
