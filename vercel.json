@@ -1,9 +1,10 @@
 {
+  "framework": "vite",
   "buildCommand": "npm run build",
   "outputDirectory": "dist",
   "rewrites": [
     {
-      "source": "/((?!api).*)",
+      "source": "/((?!api/|@|src/|node_modules/|branding/|assets/)(?!.*\\..*).*)",
       "destination": "/index.html"
     }
   ],

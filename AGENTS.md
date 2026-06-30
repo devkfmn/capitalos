@@ -22,7 +22,23 @@ Without working credentials, you can still verify: login page rendering, route p
 
 ### Serverless API functions
 
-The `api/` directory contains Vercel serverless functions. These require the `FIREBASE_SERVICE_ACCOUNT` environment variable to run locally via `vercel dev`. For front-end-only development, the Vite dev server is sufficient.
+The `api/` directory contains Vercel serverless functions. The plain Vite dev server (`npm run dev`) does **not** serve these, so exchange/perpetuals data (Hyperliquid + MEXC) only loads when the API layer is running. For front-end-only work, `npm run dev` is enough.
+
+To run the API functions locally with the frontend (full parity with production):
+
+- **`npm run dev:api`** — runs `vercel dev`, serving the Vite frontend and the `api/` functions together on one port.
+- **`npm run env:pull`** — runs `vercel env pull .env.local` to download the project's env vars (including `FIREBASE_SERVICE_ACCOUNT`) into a git-ignored `.env.local`.
+
+First-time setup:
+
+```
+npx vercel login
+npx vercel link        # link to the existing "capitalos" project
+npm run env:pull       # writes .env.local
+npm run dev:api        # http://localhost:3000
+```
+
+The only variable the perpetuals/exchange functions need is `FIREBASE_SERVICE_ACCOUNT` (used to verify the caller's Firebase ID token and read per-user settings). MEXC API keys are read per-user from Firestore, not from env. See `.env.example` for details.
 
 ### Gotchas
 
