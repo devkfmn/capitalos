@@ -54,26 +54,31 @@ Fallbacks:
 - If no cache exists, returns hardcoded `{CHF:1, EUR:1, USD:1}`
 
 ### Crypto prices + USD→CHF (current primary path)
-CryptoCompare shared library:
 
-- `lib/cryptoCompare.ts`
+CryptoCompare via Vercel API proxy (same pattern as Yahoo stock prices):
 
-Endpoints:
+- Server lib: `lib/cryptoCompare.ts` (requires `apiKey` param)
+- Client: `src/services/cryptoCompareService.ts` → `POST /api/market/crypto-prices`
+- API route: `api/market/crypto-prices.ts` (uses `process.env.CRYPTOCOMPARE_API_KEY`)
+- Snapshots: `api/snapshot/create.ts` passes env key to `fetchCryptoData`
 
-- Prices: `https://min-api.cryptocompare.com/data/pricemulti?fsyms=...&tsyms=USD`
-- USD→CHF: `https://min-api.cryptocompare.com/data/price?fsym=USD&tsyms=CHF`
+Upstream endpoints (called server-side only):
+
+- Prices: `https://min-api.cryptocompare.com/data/pricemulti?fsyms=...&tsyms=USD&api_key=...`
+- USD→CHF: `https://min-api.cryptocompare.com/data/price?fsym=USD&tsyms=CHF&api_key=...`
 
 Consumers:
 
-- Client: `src/services/cryptoCompareService.ts` re-exports the lib functions.
-- Dashboard and DataContext call `fetchCryptoData(...)` (prices + usdToChfRate).
+- Dashboard and DataContext call `fetchCryptoData(...)` (prices + usdToChfRate) via client service.
 
 Caching:
 
-- This CryptoCompare path does **not** implement local caching in `lib/cryptoCompare.ts`.
+- No local caching in `lib/cryptoCompare.ts`.
 - Refresh behavior is determined by callers (see Refresh section).
 
-### Stock/ETF/commodity prices (Yahoo Finance via RapidAPI)
+**No user API key required** — app-owned `CRYPTOCOMPARE_API_KEY` in Vercel env (see `.env.example`).
+
+### Stock/ETF/commodity prices (Yahoo Finance via Vercel proxy)
 Client service:
 
 - `src/services/yahooFinanceService.ts` → `fetchStockPrices(tickers, apiKey)`

@@ -80,8 +80,8 @@ The SSOT for how transactions affect holdings and balances is:
 ### Market data inputs
 Net worth totals depend on the following market data sources, produced elsewhere:
 
-- **Crypto prices (USD)**: CryptoCompare (`lib/cryptoCompare.ts`), typically consumed via `src/services/cryptoCompareService.ts`
-- **USD→CHF rate**: CryptoCompare (same module)
+- **Crypto prices (USD)**: CryptoCompare via Vercel proxy (`api/market/crypto-prices`), client service `src/services/cryptoCompareService.ts`
+- **USD→CHF rate**: CryptoCompare (same proxy response)
 - **Stock/ETF/commodity prices**: Yahoo Finance via RapidAPI (`src/services/yahooFinanceService.ts`)
 - **FX rates (for UI currency conversion)**: exchangerate-api.com (`src/services/exchangeRateService.ts`) via `CurrencyContext` (not specified here; see `docs/specs/market-data.spec.md`)
 

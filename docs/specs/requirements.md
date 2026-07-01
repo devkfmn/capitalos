@@ -42,7 +42,7 @@ Capitalos is a unified wealth management web application. It tracks total net wo
 - **FR-3** The application shall allow authenticated users to create, read, update, and delete forecast entries and to set platform safety buffer in Analytics.
 - **FR-4** The application shall allow authenticated users to manage platforms (add, edit, remove, set default) in Settings.
 - **FR-5** The application shall persist user data to Firestore with optional localStorage backup/sync as implemented in storageService.
-- **FR-6** The application shall fetch crypto prices (CryptoCompare), stock/index/commodity prices (Yahoo Finance via Vercel API proxy), and FX rates (exchange-api with defined fallback). Stock/ETF/commodity prices are fetched on every app open/refresh (no Firestore caching, no API key needed). Crypto and FX may use cached values with a defined interval (e.g. 5 minutes).
+- **FR-6** The application shall fetch crypto prices (CryptoCompare via Vercel API proxy), stock/index/commodity prices (Yahoo Finance via Vercel API proxy), and FX rates (exchange-api with defined fallback). Stock/ETF/commodity and crypto prices are fetched on every app open/refresh (no Firestore caching). Crypto uses an app-owned `CRYPTOCOMPARE_API_KEY` in server env; users do not configure it. Crypto and FX may use cached values with a defined interval (e.g. 5 minutes).
 - **FR-7** The application shall compute net worth and category totals using a single valuation engine and the same market data snapshot for UI and for snapshot creation.
 - **FR-8** The application shall support optional API keys (Hyperliquid wallet, MEXC) for perpetuals data; behavior when keys are missing shall be defined (e.g. fallback or hide features). Stock/ETF/commodity prices do not require an API key.
 - **FR-9** The application shall support creation of net worth snapshots (server-side via API or client-side) and storage in Firestore under the user's snapshots collection.
@@ -58,14 +58,14 @@ Capitalos is a unified wealth management web application. It tracks total net wo
 ## 8. Data & Single Source of Truth (SSOT)
 
 - **User data**: Stored in Firestore under `users/{uid}/` (e.g. netWorthItems, transactions, snapshots, cashflow collections, platforms, forecastEntries). localStorage may be used as backup or cache; Firestore is the authoritative persistence for synced data.
-- **Market data**: FX rates shall be fetched only from the defined exchange-api (with jsdelivr and pages.dev fallback). Crypto prices shall be fetched only from CryptoCompare. Stock/ETF/commodity prices shall be fetched only from Yahoo Finance (via Vercel API proxy, no API key required). All such fetches shall occur only in the designated market-data services (e.g. FxRateService, CryptoPriceService, DailyPriceService). A compatibility layer may expose legacy function names that delegate to these services.
+- **Market data**: FX rates shall be fetched only from the defined exchange-api (with jsdelivr and pages.dev fallback). Crypto prices shall be fetched only from CryptoCompare via Vercel API proxy (`api/market/crypto-prices`) with app-owned `CRYPTOCOMPARE_API_KEY`. Stock/ETF/commodity prices shall be fetched only from Yahoo Finance (via Vercel API proxy, no API key required). All such fetches shall occur only in the designated market-data services (e.g. FxRateService, CryptoPriceService, DailyPriceService). A compatibility layer may expose legacy function names that delegate to these services.
 - **Valuation**: A single valuation engine (e.g. ValuationEngine) shall compute net worth and category totals using the market data services. Dashboard, Net Worth, and snapshot creation shall use this engine or its output (e.g. ValuationResult); there shall not be duplicate calculation paths for the same metrics.
 - **Snapshots**: Snapshot creation shall use the same valuation logic as the UI (e.g. createSnapshotFromValuation or equivalent). Snapshots are stored with date as document id; category totals and total in CHF shall be stored.
 
 ## 9. Exchange & Market Data Rules
 
 - **FX**: Must use fawazahmed0/exchange-api. Primary URL and fallback URL (e.g. jsdelivr CDN, then currency-api.pages.dev) shall be defined in the FX service. No other FX provider shall be used for the main conversion path.
-- **Crypto**: Must use CryptoCompare only for crypto price data. No other crypto price API shall be used for the main path.
+- **Crypto**: Must use CryptoCompare only for crypto price data, via Vercel API proxy with server env key. No other crypto price API shall be used for the main path.
 - **Stocks / Index Funds / Commodities**: Must use Yahoo Finance via Vercel API proxy. Prices are fetched on every app open/refresh through `DailyPriceService`. No API key is required. Symbols use Yahoo Finance format (e.g. `AAPL`, `VWCE.SW`, `GC=F`). No other stock/ETF/commodity price API shall be used for the main path.
 - **Perpetuals**: Hyperliquid and MEXC data shall be fetched via the implemented API and optional WebSocket clients. API keys (Hyperliquid wallet address, MEXC API key/secret) shall be stored per user and used only for that user's data.
 

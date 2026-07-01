@@ -200,7 +200,7 @@ The snapshot handler calls external APIs directly (no internal HTTP roundtrips),
 - `lib/hyperliquidApi.ts` → `fetchHyperliquidAccountEquity(walletAddress)` — calls Hyperliquid API directly for account equity across all DEXs.
 - `lib/mexcApi.ts` → `fetchMexcAccountEquityUsd(apiKey, secretKey)` — calls MEXC contract API directly for futures account equity.
 - `lib/yahooFinance.ts` → `fetchStockPrices(symbols)` — calls Yahoo Finance directly for stock/index/commodity prices.
-- `lib/cryptoCompare.ts` → `fetchCryptoData(tickers)` — calls CryptoCompare for crypto prices (pre-existing shared lib).
+- `lib/cryptoCompare.ts` → `fetchCryptoData(tickers, apiKey)` — calls CryptoCompare for crypto prices (server-side with `CRYPTOCOMPARE_API_KEY`).
 
 ## Future Notes (optional, clearly marked as PROPOSAL)
 **PROPOSAL**: Add deterministic cleanup/retention and expose snapshot creation results in the Settings UI (including "already exists" outcome).

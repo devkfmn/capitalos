@@ -1,34 +1,64 @@
 /**
  * CryptoCompare API service for fetching cryptocurrency prices and exchange rates
  * Shared between client and serverless functions.
+ *
+ * Server callers must pass apiKey (typically process.env.CRYPTOCOMPARE_API_KEY).
+ * Browser code should use src/services/cryptoCompareService.ts (Vercel proxy).
  */
 
-/**
- * Normalize ticker symbol (uppercase, trim)
- */
 function normalizeTicker(ticker: string): string {
   return ticker.trim().toUpperCase()
 }
 
+function buildCryptoCompareUrl(path: string, apiKey?: string): string {
+  const base = `https://min-api.cryptocompare.com${path}`
+  if (!apiKey) return base
+  const separator = path.includes('?') ? '&' : '?'
+  return `${base}${separator}api_key=${encodeURIComponent(apiKey)}`
+}
+
+function assertCryptoCompareOk(data: unknown): void {
+  if (
+    data &&
+    typeof data === 'object' &&
+    'Response' in data &&
+    (data as { Response?: string }).Response === 'Error'
+  ) {
+    const message =
+      'Message' in data && typeof (data as { Message?: unknown }).Message === 'string'
+        ? (data as { Message: string }).Message
+        : 'CryptoCompare API error'
+    throw new Error(message)
+  }
+}
+
+/** Free tier allows 1 call/second — wait before a follow-up request. */
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
 /**
  * Fetch current USD prices for multiple cryptocurrencies
- * @param tickers - Array of cryptocurrency ticker symbols (e.g., ['BTC', 'ETH', 'SOL'])
- * @returns Record mapping ticker to USD price, or empty object on error
  */
-export async function fetchCryptoPrices(tickers: string[]): Promise<Record<string, number>> {
+export async function fetchCryptoPrices(
+  tickers: string[],
+  apiKey?: string
+): Promise<Record<string, number>> {
   if (tickers.length === 0) {
     return {}
   }
 
+  if (!apiKey) {
+    console.warn('[cryptoCompare] fetchCryptoPrices called without API key')
+    return {}
+  }
+
   try {
-    // Normalize and deduplicate tickers
     const normalizedTickers = [...new Set(tickers.map(normalizeTicker))]
     const tickerString = normalizedTickers.join(',')
 
-    // CryptoCompare API endpoint for multiple prices
-    // Format: /data/pricemulti?fsyms=BTC,ETH,SOL&tsyms=USD
     const response = await fetch(
-      `https://min-api.cryptocompare.com/data/pricemulti?fsyms=${tickerString}&tsyms=USD`,
+      buildCryptoCompareUrl(`/data/pricemulti?fsyms=${tickerString}&tsyms=USD`, apiKey),
       {
         method: 'GET',
         headers: {
@@ -38,12 +68,15 @@ export async function fetchCryptoPrices(tickers: string[]): Promise<Record<strin
     )
 
     if (!response.ok) {
+      if (response.status === 401) {
+        console.error('[cryptoCompare] API returned 401 — check CRYPTOCOMPARE_API_KEY')
+      }
       throw new Error(`CryptoCompare API returned ${response.status}`)
     }
 
     const data = await response.json()
+    assertCryptoCompareOk(data)
 
-    // CryptoCompare returns: { "BTC": { "USD": 50000 }, "ETH": { "USD": 3000 } }
     const prices: Record<string, number> = {}
 
     for (const ticker of normalizedTickers) {
@@ -63,24 +96,33 @@ export async function fetchCryptoPrices(tickers: string[]): Promise<Record<strin
 
 /**
  * Fetch current USD to CHF exchange rate
- * @returns USD to CHF rate (e.g., 0.92 means 1 USD = 0.92 CHF), or null on error
  */
-export async function fetchUsdToChfRate(): Promise<number | null> {
+export async function fetchUsdToChfRate(apiKey?: string): Promise<number | null> {
+  if (!apiKey) {
+    console.warn('[cryptoCompare] fetchUsdToChfRate called without API key')
+    return null
+  }
+
   try {
-    // CryptoCompare API endpoint for exchange rate
-    // Format: /data/price?fsym=USD&tsyms=CHF
-    const response = await fetch(`https://min-api.cryptocompare.com/data/price?fsym=USD&tsyms=CHF`, {
-      method: 'GET',
-      headers: {
-        Accept: 'application/json',
-      },
-    })
+    const response = await fetch(
+      buildCryptoCompareUrl('/data/price?fsym=USD&tsyms=CHF', apiKey),
+      {
+        method: 'GET',
+        headers: {
+          Accept: 'application/json',
+        },
+      }
+    )
 
     if (!response.ok) {
+      if (response.status === 401) {
+        console.error('[cryptoCompare] API returned 401 — check CRYPTOCOMPARE_API_KEY')
+      }
       throw new Error(`CryptoCompare API returned ${response.status}`)
     }
 
     const data = await response.json()
+    assertCryptoCompareOk(data)
 
     if (data.CHF && typeof data.CHF === 'number') {
       return data.CHF
@@ -95,13 +137,20 @@ export async function fetchUsdToChfRate(): Promise<number | null> {
 
 /**
  * Fetch both crypto prices and USD to CHF rate in a single batch
- * @param tickers - Array of cryptocurrency ticker symbols
- * @returns Object with prices and usdToChfRate
  */
 export async function fetchCryptoData(
-  tickers: string[]
+  tickers: string[],
+  apiKey?: string,
+  options?: { includeUsdToChf?: boolean }
 ): Promise<{ prices: Record<string, number>; usdToChfRate: number | null }> {
-  const [prices, usdToChfRate] = await Promise.all([fetchCryptoPrices(tickers), fetchUsdToChfRate()])
+  const prices = await fetchCryptoPrices(tickers, apiKey)
+
+  if (options?.includeUsdToChf !== true) {
+    return { prices, usdToChfRate: null }
+  }
+
+  // CryptoCompare free tier: max 1 call/second — never run in parallel with prices.
+  await delay(1100)
+  const usdToChfRate = await fetchUsdToChfRate(apiKey)
   return { prices, usdToChfRate }
 }
-

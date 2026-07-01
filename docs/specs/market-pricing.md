@@ -117,6 +117,42 @@ Only these categories use Yahoo Finance prices:
 
 Crypto, Perpetuals, and other categories use different data sources.
 
+## Crypto Pricing - CryptoCompare via Vercel Proxy
+
+Crypto spot prices (USD) and USD→CHF rate are fetched via a Vercel API proxy. Users configure nothing — the app uses `CRYPTOCOMPARE_API_KEY` in server env.
+
+```
+┌─────────────────────────┐
+│  Client Device          │
+│  (cryptoCompareService) │
+└───────────┬─────────────┘
+            │ POST /api/market/crypto-prices
+            │ (Bearer token + tickers)
+            ▼
+┌─────────────────────────┐
+│  Vercel API Route       │
+│  crypto-prices.ts       │
+└───────────┬─────────────┘
+            │ CRYPTOCOMPARE_API_KEY
+            ▼
+┌──────────────────────┐
+│  CryptoCompare API   │
+│  /data/pricemulti    │
+└──────────────────────┘
+```
+
+**File:** `api/market/crypto-prices.ts`
+
+**Endpoint:** `POST /api/market/crypto-prices`
+
+**Request:** `{ "tickers": ["BTC", "ETH"] }`
+
+**Response:** `{ "success": true, "prices": { "BTC": 60000 }, "usdToChfRate": 0.88, "source": "cryptocompare" }`
+
+**Client:** `src/services/cryptoCompareService.ts` (mirrors `DailyPriceService` pattern)
+
+**Env:** `CRYPTOCOMPARE_API_KEY` in Vercel / `.env.local` for `dev:api`
+
 ## Error Handling
 
 | Scenario | Behavior |

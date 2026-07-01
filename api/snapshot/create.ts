@@ -182,7 +182,10 @@ async function createSnapshotForUser(
     .filter(Boolean)
   const uniqueStockTickers = [...new Set(stockTickers)]
 
-  const { prices: cryptoPrices, usdToChfRate } = await fetchCryptoData(uniqueCryptoTickers).catch(() => ({
+  const { prices: cryptoPrices, usdToChfRate } = await fetchCryptoData(
+    uniqueCryptoTickers,
+    process.env.CRYPTOCOMPARE_API_KEY
+  ).catch(() => ({
     prices: {} as Record<string, number>,
     usdToChfRate: null as number | null,
   }))
