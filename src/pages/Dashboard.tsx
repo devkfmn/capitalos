@@ -19,6 +19,7 @@ import { useCurrency } from '../contexts/CurrencyContext'
 import { useAuth } from '../lib/dataSafety/authGateCompat'
 import { useIncognito } from '../contexts/IncognitoContext'
 import { useData } from '../contexts/DataContext'
+import MarketDataWarningBanner from '../components/MarketDataWarningBanner'
 import { formatMoney } from '../lib/currency'
 import { formatDate } from '../lib/dateFormat'
 import type { NetWorthSnapshot } from '../services/snapshotService'
@@ -206,7 +207,7 @@ function Dashboard() {
 
   // Load data from DataContext (includes merged Perpetuals data)
   const { uid } = useAuth()
-  const { data, loading: dataLoading } = useData()
+  const { data, loading: dataLoading, refreshPrices } = useData()
   const netWorthItems = data.netWorthItems
   const transactions = data.transactions
   const inflowItems = data.inflowItems
@@ -275,8 +276,7 @@ function Dashboard() {
 
     const handleTouchEnd = () => {
       if (isPulling && touchEndY - touchStartY > 100) {
-        // Trigger refresh
-        fetchAllPrices(true)
+        refreshPrices()
       }
       isPulling = false
       touchStartY = 0
@@ -296,7 +296,7 @@ function Dashboard() {
       document.removeEventListener('touchend', handleTouchEnd)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []) // Only run once on mount
+  }, [refreshPrices])
 
 
   // Calculate total net worth using shared calculation service
@@ -990,6 +990,8 @@ function Dashboard() {
       <div className="max-w-7xl mx-auto space-y-6">
         {/* Page Title */}
         <Heading level={1}>Dashboard</Heading>
+
+        <MarketDataWarningBanner />
         
         {/* Total Net Worth, Performance, Monthly Cashflow — mobile: TNW, Perf, MC; desktop: TNW+MC row, then Perf */}
         <div className="flex flex-col gap-6 md:grid md:grid-cols-2">

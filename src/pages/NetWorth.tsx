@@ -13,6 +13,7 @@ import type { CurrencyCode } from '../lib/currency'
 import { fetchCryptoPrices } from '../services/cryptoCompareService'
 import { getDailyPricesMap } from '../services/market-data/DailyPriceService'
 import { useData } from '../contexts/DataContext'
+import MarketDataWarningBanner from '../components/MarketDataWarningBanner'
 import { NetWorthCalculationService } from '../services/netWorthCalculationService'
 import { calculateBalanceChf, calculateCoinAmount, calculateHoldings, calculateAveragePricePerItem } from '../services/balanceCalculationService'
 import { DEFAULT_PLATFORMS } from '../constants/platforms'
@@ -686,10 +687,13 @@ function NetWorthCategorySection({
                                 <>
                                   <span
                                     className={`inline-block w-2 h-2 rounded-full flex-shrink-0 ${isLivePrice ? 'bg-green-500' : 'bg-red-500'}`}
+                                    title={isLivePrice ? 'Live market price' : 'No live price — valued from your transactions'}
                                     aria-hidden="true"
                                   />
                                   {displayPrice !== null ? (
                                     <>{formatPriceInItemCurrency(displayPrice)}</>
+                                  ) : !isLivePrice ? (
+                                    <span className="text-text-muted">Est.</span>
                                   ) : (
                                     <span className="sr-only">No live price</span>
                                   )}
@@ -1382,6 +1386,8 @@ function NetWorth() {
       <div className="max-w-7xl mx-auto space-y-6">
         {/* Page Title */}
         <Heading level={1}>Net Worth</Heading>
+
+        <MarketDataWarningBanner />
         
         {/* Total Net Worth */}
         <div className="bg-bg-frame border border-border-subtle rounded-card shadow-card px-3 py-3 lg:p-6">

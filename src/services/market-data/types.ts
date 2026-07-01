@@ -77,3 +77,64 @@ export interface InflightRequest<T> {
   promise: Promise<T>
   timestamp: number
 }
+
+// ============================================================================
+// Market data health (DataContext + UI)
+// ============================================================================
+
+export type FetchHealth = 'idle' | 'loading' | 'ok' | 'partial' | 'error'
+
+export interface PriceSourceStatus {
+  health: FetchHealth
+  fetchedAt: number | null
+  requestedTickers: string[]
+  missingTickers: string[]
+  errorMessage?: string
+}
+
+export interface MarketDataStatus {
+  crypto: PriceSourceStatus
+  stocks: PriceSourceStatus
+}
+
+export function createIdlePriceSourceStatus(): PriceSourceStatus {
+  return {
+    health: 'idle',
+    fetchedAt: null,
+    requestedTickers: [],
+    missingTickers: [],
+  }
+}
+
+export function createInitialMarketDataStatus(): MarketDataStatus {
+  return {
+    crypto: createIdlePriceSourceStatus(),
+    stocks: createIdlePriceSourceStatus(),
+  }
+}
+
+export function deriveFetchHealth(
+  requestedTickers: string[],
+  missingTickers: string[],
+  hadError: boolean
+): FetchHealth {
+  if (requestedTickers.length === 0) return 'idle'
+  if (hadError && missingTickers.length === requestedTickers.length) return 'error'
+  if (missingTickers.length > 0) return 'partial'
+  return 'ok'
+}
+
+export function buildPriceSourceStatus(
+  requestedTickers: string[],
+  missingTickers: string[],
+  options?: { hadError?: boolean; errorMessage?: string; fetchedAt?: number }
+): PriceSourceStatus {
+  const hadError = options?.hadError ?? false
+  return {
+    health: deriveFetchHealth(requestedTickers, missingTickers, hadError),
+    fetchedAt: options?.fetchedAt ?? Date.now(),
+    requestedTickers,
+    missingTickers,
+    errorMessage: options?.errorMessage,
+  }
+}

@@ -19,6 +19,15 @@ export interface DailyPriceResult {
   asOfDate: string
 }
 
+export interface DailyPricesFetchResult {
+  prices: Record<string, number>
+  requestedTickers: string[]
+  missingTickers: string[]
+  errorMessage?: string
+  warning?: string
+  success: boolean
+}
+
 // ============================================================================
 // Utility Functions
 // ============================================================================
@@ -62,7 +71,12 @@ async function fetchPricesFromApi(
 
     if (!response.ok) {
       console.error(`[DailyPriceService] API returned ${response.status}`)
-      return null
+      return {
+        success: false,
+        prices: {},
+        source: 'yahoo',
+        error: `API returned ${response.status}`,
+      }
     }
 
     const data: ApiUpdateResponse = await response.json()
@@ -79,7 +93,12 @@ async function fetchPricesFromApi(
     return data
   } catch (err) {
     console.error('[DailyPriceService] Error calling API:', err)
-    return null
+    return {
+      success: false,
+      prices: {},
+      source: 'yahoo',
+      error: err instanceof Error ? err.message : 'Failed to fetch stock prices',
+    }
   }
 }
 
@@ -95,36 +114,79 @@ export async function getDailyPrices(
   symbolsRaw: string[],
   _opts?: { forceRefresh?: boolean; uid?: string }
 ): Promise<Record<string, DailyPriceResult>> {
-  if (symbolsRaw.length === 0) return {}
-
+  const fetchResult = await fetchDailyPricesData(symbolsRaw)
   const today = getUtcDateKey()
-  const symbolKeys = [...new Set(symbolsRaw.map(normalizeSymbolKey))]
-
-  const apiResponse = await fetchPricesFromApi(symbolKeys)
-
   const result: Record<string, DailyPriceResult> = {}
 
-  if (apiResponse?.success && apiResponse.prices) {
-    for (const [symbolKey, priceData] of Object.entries(apiResponse.prices)) {
-      result[symbolKey] = {
-        price: priceData.price,
-        currency: priceData.currency,
-        marketTime: priceData.marketTime,
-        isStale: false,
-        asOfDate: today,
-      }
-    }
-  }
-
-  if (import.meta.env.DEV) {
-    const found = Object.keys(result).length
-    const missing = symbolKeys.length - found
-    if (missing > 0) {
-      console.warn(`[DailyPriceService] No prices found for ${missing} of ${symbolKeys.length} symbols`)
+  for (const [symbolKey, price] of Object.entries(fetchResult.prices)) {
+    result[symbolKey] = {
+      price,
+      currency: null,
+      marketTime: null,
+      isStale: false,
+      asOfDate: today,
     }
   }
 
   return result
+}
+
+/**
+ * Fetch stock/ETF/commodity prices with health metadata.
+ */
+export async function fetchDailyPricesData(
+  symbolsRaw: string[]
+): Promise<DailyPricesFetchResult> {
+  const requestedTickers = [...new Set(symbolsRaw.map(normalizeSymbolKey))]
+
+  if (requestedTickers.length === 0) {
+    return {
+      prices: {},
+      requestedTickers: [],
+      missingTickers: [],
+      success: true,
+    }
+  }
+
+  const apiResponse = await fetchPricesFromApi(requestedTickers)
+  const prices: Record<string, number> = {}
+
+  if (apiResponse?.success && apiResponse.prices) {
+    for (const [symbolKey, priceData] of Object.entries(apiResponse.prices)) {
+      if (
+        typeof priceData.price === 'number' &&
+        Number.isFinite(priceData.price) &&
+        priceData.price > 0
+      ) {
+        prices[symbolKey] = priceData.price
+      }
+    }
+  }
+
+  const apiMissing = apiResponse?.missing || []
+  const derivedMissing = requestedTickers.filter((ticker) => !(ticker in prices))
+  const missingTickers = [...new Set([...apiMissing, ...derivedMissing])]
+
+  if (import.meta.env.DEV && missingTickers.length > 0) {
+    console.warn(
+      `[DailyPriceService] No prices found for ${missingTickers.length} of ${requestedTickers.length} symbols`
+    )
+  }
+
+  const hadTotalFailure = !apiResponse?.success && Object.keys(prices).length === 0
+
+  return {
+    prices,
+    requestedTickers,
+    missingTickers,
+    errorMessage: hadTotalFailure
+      ? apiResponse?.error || 'Failed to fetch stock prices'
+      : missingTickers.length > 0
+        ? apiResponse?.error
+        : undefined,
+    warning: apiResponse?.warning,
+    success: !hadTotalFailure,
+  }
 }
 
 /**
@@ -134,14 +196,8 @@ export async function getDailyPricesMap(
   symbolsRaw: string[],
   _uid?: string
 ): Promise<Record<string, number>> {
-  const prices = await getDailyPrices(symbolsRaw)
-  const result: Record<string, number> = {}
-
-  for (const [symbol, data] of Object.entries(prices)) {
-    result[symbol] = data.price
-  }
-
-  return result
+  const result = await fetchDailyPricesData(symbolsRaw)
+  return result.prices
 }
 
 // ============================================================================

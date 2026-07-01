@@ -177,23 +177,80 @@ Per-feature loading states include:
 - Net Worth modals show `(fetching...)` next to price-per-item during auto-fetch.
 - Dashboard has an internal `isRefreshingPrices` state used for pull-to-refresh and background refresh, but does not display a global overlay by default.
 
+## Market Data Health Status
+
+`DataContext` exposes `marketDataStatus` alongside price maps so the UI can surface degraded fetches without changing valuation fallback logic.
+
+### Types
+
+```typescript
+type FetchHealth = 'idle' | 'loading' | 'ok' | 'partial' | 'error'
+
+interface PriceSourceStatus {
+  health: FetchHealth
+  fetchedAt: number | null
+  requestedTickers: string[]
+  missingTickers: string[]
+  errorMessage?: string
+}
+
+interface MarketDataStatus {
+  crypto: PriceSourceStatus
+  stocks: PriceSourceStatus
+}
+```
+
+### Health assignment
+
+| Scenario | `health` | `missingTickers` |
+|----------|----------|------------------|
+| No items in category | `idle` | `[]` |
+| Fetch in progress | `loading` | prior value or `[]` |
+| API throws / returns null | `error` | all requested |
+| API OK but some symbols missing | `partial` | missing subset |
+| All symbols returned | `ok` | `[]` |
+
+### Refresh safety
+
+- `refreshPrices` MUST merge newly fetched prices into existing maps.
+- On failed refresh, `refreshPrices` MUST NOT overwrite non-empty `cryptoPrices` / `stockPrices` with `{}`.
+- Health status MAY downgrade on failure; price maps MUST retain last known good values.
+
+## UI Error Visibility
+
+Wealth pages (Dashboard, Net Worth, Analytics) MUST show `MarketDataWarningBanner` when `useMarketDataHealth().showBanner === true`.
+
+The banner:
+
+- Is persistent while market data is degraded (not dismissible until health recovers).
+- Shows a plain-language summary and optional detail list.
+- Provides a **Retry** action that calls `DataContext.refreshPrices()`.
+
+Net Worth row indicators for market-driven categories:
+
+- Green dot = live price available.
+- Red dot + **Est.** label = transaction-based fallback; dot MUST have a `title` tooltip.
+
+`useMarketDataHealth` aggregates `marketDataStatus`, `CurrencyContext` (`ratesReady`, `error`, `exchangeRates.fetchedAt`), and active net worth items into user-facing messages. It does not change valuation math.
+
 ## Error Handling & Fallbacks
 
 ### FX rates
 - If exchange rate fetch fails:
   - Use cached localStorage value if base matches (even if older than 24h)
-  - Else use hardcoded 1:1 fallback map
+  - Else signal unavailable (`ratesReady = false`); do NOT fabricate 1:1 rates
+- Stale cached FX (>24h) while `ratesReady` MAY surface a softer warning via `useMarketDataHealth`
 
 ### Crypto prices
 - If crypto price fetch fails, consumer code generally:
-  - Uses empty price map `{}` and `usdToChfRate=null`
+  - Uses empty price map `{}` and `usdToChfRate=null` (or merges last known good on refresh failure)
   - Net worth and dashboard computations fall back to transaction-based valuations.
+  - UI MUST surface degraded state via banner and row indicators.
 
-### Yahoo prices
-- If API key is missing:
-  - Legacy service logs an error and returns `{}`
-- If rate-limited (HTTP 429):
-  - Legacy service returns `{}` and logs a helpful message
+### Yahoo / daily prices
+- If API fails:
+  - Returns empty or partial price map; logs errors; MUST NOT throw to UI caller
+- Partial responses populate `missingTickers` in `marketDataStatus.stocks`
 
 ## Edge Cases
 
@@ -226,6 +283,10 @@ Involved code:
    - Two back-to-back Yahoo Finance fetches MUST be delayed by at least 1 second.
 3. **CryptoCompare failure fallback**:
    - If CryptoCompare requests fail, net worth calculations MUST still render finite totals (using transaction-derived valuations).
+4. **UI visibility on failure**:
+   - When crypto or stock health is `error` or `partial` and the user has market-driven items, wealth pages MUST show `MarketDataWarningBanner`.
+5. **Refresh safety**:
+   - After a failed `refreshPrices`, previously loaded prices MUST remain in state.
 
 ## Future Notes (optional, clearly marked as PROPOSAL)
 **PROPOSAL**: Remove duplication by picking one market-data subsystem (legacy vs `src/services/market-data/*`) and wiring it consistently through the app.

@@ -7,6 +7,7 @@ import { useAuth } from '../lib/dataSafety/authGateCompat'
 import { useCurrency } from '../contexts/CurrencyContext'
 import { useIncognito } from '../contexts/IncognitoContext'
 import { useData } from '../contexts/DataContext'
+import MarketDataWarningBanner from '../components/MarketDataWarningBanner'
 import { formatMoney } from '../lib/currency'
 import { toDateSafe } from '../lib/firestoreSafeWrite'
 import {
@@ -520,6 +521,8 @@ function Analytics() {
     <div className="min-h-screen px-2 lg:px-6 pt-4 pb-12 lg:pt-6 lg:pb-16">
       <div className="max-w-7xl mx-auto space-y-6">
         <Heading level={1}>Analytics</Heading>
+
+        <MarketDataWarningBanner />
 
         <div className="bg-bg-frame border border-border-subtle rounded-card shadow-card px-3 py-3 lg:p-6">
           <div className="mb-6 pb-4 border-b border-border-strong">

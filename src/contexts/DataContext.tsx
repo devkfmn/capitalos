@@ -11,7 +11,14 @@ import {
 } from '../services/storageService'
 import { loadSnapshots, type NetWorthSnapshot } from '../services/snapshotService'
 import { fetchCryptoData } from '../services/cryptoCompareService'
-import { getDailyPricesMap, categoryUsesMarketApi } from '../services/market-data/DailyPriceService'
+import { fetchDailyPricesData, categoryUsesMarketApi } from '../services/market-data/DailyPriceService'
+import {
+  buildPriceSourceStatus,
+  createIdlePriceSourceStatus,
+  createInitialMarketDataStatus,
+  type MarketDataStatus,
+  type PriceSourceStatus,
+} from '../services/market-data/types'
 import { fetchHyperliquidPerpetualsData } from '../services/hyperliquidService'
 import { MexcFuturesPositionsWs, type MexcWsStatus } from '../services/mexcFuturesPositionsWs'
 import { fetchMexcEquityUsd, fetchMexcOpenOrders, fetchMexcOpenPositions, fetchMexcUnrealizedPnlWindows } from '../services/mexcFuturesService'
@@ -38,6 +45,8 @@ interface DataContextType {
   loading: boolean
   error: string | null
   isInitialLoad: boolean // True only during the very first load, false for refreshes
+  marketDataStatus: MarketDataStatus
+  isRefreshingPrices: boolean
   mexcPositionsWs: PerpetualsOpenPosition[]
   mexcPositionsWsStatus: MexcWsStatus
   mexcPositionsWsError: string | null
@@ -89,6 +98,8 @@ export function DataProvider({ children }: DataProviderProps) {
   
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [marketDataStatus, setMarketDataStatus] = useState<MarketDataStatus>(createInitialMarketDataStatus())
+  const [isRefreshingPrices, setIsRefreshingPrices] = useState(false)
   // Use ref for WebSocket state to prevent re-renders on every update
   const mexcWsStatusRef = useRef<MexcWsStatus>('disconnected')
   const mexcWsPositionsMapRef = useRef<Map<string, PerpetualsOpenPosition>>(new Map())
@@ -132,48 +143,128 @@ export function DataProvider({ children }: DataProviderProps) {
   const fetchCryptoPrices = async (items: NetWorthItem[]): Promise<{
     cryptoPrices: Record<string, number>
     usdToChfRate: number | null
+    status: PriceSourceStatus
   }> => {
     const cryptoItems = getActiveNetWorthItems(items).filter((item) => item.category === 'Crypto')
     const tickers = cryptoItems.map((item) => item.name.trim().toUpperCase())
     const uniqueTickers = [...new Set(tickers)]
 
     if (uniqueTickers.length === 0) {
-      return { cryptoPrices: {}, usdToChfRate: null }
+      return {
+        cryptoPrices: {},
+        usdToChfRate: null,
+        status: createIdlePriceSourceStatus(),
+      }
     }
 
     try {
-      const { prices, usdToChfRate } = await fetchCryptoData(uniqueTickers)
-      return { cryptoPrices: prices, usdToChfRate }
+      const result = await fetchCryptoData(uniqueTickers)
+      const status = buildPriceSourceStatus(result.requestedTickers, result.missingTickers, {
+        hadError: !result.success,
+        errorMessage: result.errorMessage,
+      })
+      return {
+        cryptoPrices: result.prices,
+        usdToChfRate: result.usdToChfRate,
+        status,
+      }
     } catch (error) {
       console.error('Error fetching crypto prices:', error)
-      return { cryptoPrices: {}, usdToChfRate: null }
+      const message = error instanceof Error ? error.message : 'Failed to fetch crypto prices'
+      return {
+        cryptoPrices: {},
+        usdToChfRate: null,
+        status: buildPriceSourceStatus(uniqueTickers, uniqueTickers, {
+          hadError: true,
+          errorMessage: message,
+        }),
+      }
     }
   }
 
-  // Fetch stock/index fund/commodity prices from daily Firestore cache
-  const fetchStockPricesData = async (items: NetWorthItem[]): Promise<Record<string, number>> => {
+  // Fetch stock/index fund/commodity prices
+  const fetchStockPricesData = async (items: NetWorthItem[]): Promise<{
+    stockPrices: Record<string, number>
+    status: PriceSourceStatus
+  }> => {
     const stockItems = getActiveNetWorthItems(items).filter((item) => categoryUsesMarketApi(item.category))
 
     if (stockItems.length === 0) {
-      console.log('[DataContext] fetchStockPricesData: No stock items found')
-      return {}
+      return {
+        stockPrices: {},
+        status: createIdlePriceSourceStatus(),
+      }
     }
 
     const tickers = stockItems.map((item) => item.name.trim().toUpperCase())
     const uniqueTickers = [...new Set(tickers)]
 
     try {
-      console.log('[DataContext] fetchStockPricesData:', {
-        tickers: uniqueTickers,
-        source: 'DailyPriceService (Firestore cache + API)',
+      const result = await fetchDailyPricesData(uniqueTickers)
+      const status = buildPriceSourceStatus(result.requestedTickers, result.missingTickers, {
+        hadError: !result.success,
+        errorMessage: result.errorMessage || result.warning,
       })
-      // Use the daily Firestore cache - triggers API fetch if needed
-      const prices = await getDailyPricesMap(uniqueTickers)
-      console.log('[DataContext] fetchStockPricesData result:', prices)
-      return prices
+      return {
+        stockPrices: result.prices,
+        status,
+      }
     } catch (error) {
       console.error('[DataContext] Error fetching stock prices:', error)
-      return {}
+      const message = error instanceof Error ? error.message : 'Failed to fetch stock prices'
+      return {
+        stockPrices: {},
+        status: buildPriceSourceStatus(uniqueTickers, uniqueTickers, {
+          hadError: true,
+          errorMessage: message,
+        }),
+      }
+    }
+  }
+
+  const mergePriceMaps = (
+    previous: Record<string, number>,
+    incoming: Record<string, number>
+  ): Record<string, number> => {
+    if (Object.keys(incoming).length === 0) {
+      return previous
+    }
+    return { ...previous, ...incoming }
+  }
+
+  const applyPriceRefresh = (
+    prev: AppData,
+    cryptoData: Awaited<ReturnType<typeof fetchCryptoPrices>>,
+    stockData: Awaited<ReturnType<typeof fetchStockPricesData>>,
+    options?: { preserveOnEmpty?: boolean }
+  ) => {
+    const preserveOnEmpty = options?.preserveOnEmpty ?? false
+    const cryptoPrices = preserveOnEmpty
+      ? mergePriceMaps(prev.cryptoPrices, cryptoData.cryptoPrices)
+      : cryptoData.cryptoPrices
+    const stockPrices = preserveOnEmpty
+      ? mergePriceMaps(prev.stockPrices, stockData.stockPrices)
+      : stockData.stockPrices
+    const usdToChfRate =
+      cryptoData.usdToChfRate !== null
+        ? cryptoData.usdToChfRate
+        : preserveOnEmpty
+          ? prev.usdToChfRate
+          : null
+
+    const calculationResult = calculateTotals(
+      prev.netWorthItems,
+      prev.transactions,
+      cryptoPrices,
+      stockPrices,
+      usdToChfRate
+    )
+
+    return {
+      cryptoPrices,
+      stockPrices,
+      usdToChfRate,
+      calculationResult,
     }
   }
 
@@ -383,7 +474,7 @@ export function DataProvider({ children }: DataProviderProps) {
       
       // Step 2: Fetch exchange prices (USD→CHF rate) and crypto/stock prices
       // API keys are now guaranteed to be available (if configured)
-      const [cryptoData, stockPricesData] = await Promise.all([
+      const [cryptoData, stockData] = await Promise.all([
         fetchCryptoPrices(firebaseData.items),
         fetchStockPricesData(firebaseData.items),
       ])
@@ -400,7 +491,7 @@ export function DataProvider({ children }: DataProviderProps) {
         itemsWithPerpetuals,
         firebaseData.transactions,
         cryptoData.cryptoPrices,
-        stockPricesData,
+        stockData.stockPrices,
         cryptoData.usdToChfRate
       )
       
@@ -412,9 +503,13 @@ export function DataProvider({ children }: DataProviderProps) {
         outflowItems: firebaseData.outflowItems,
         snapshots: firebaseData.snapshots,
         cryptoPrices: cryptoData.cryptoPrices,
-        stockPrices: stockPricesData,
+        stockPrices: stockData.stockPrices,
         usdToChfRate: cryptoData.usdToChfRate,
         calculationResult,
+      })
+      setMarketDataStatus({
+        crypto: cryptoData.status,
+        stocks: stockData.status,
       })
       
       hasLoadedDataRef.current = true
@@ -442,8 +537,14 @@ export function DataProvider({ children }: DataProviderProps) {
       return
     }
 
+    setIsRefreshingPrices(true)
+    setMarketDataStatus((prev) => ({
+      crypto: { ...prev.crypto, health: prev.crypto.health === 'idle' ? 'idle' : 'loading' },
+      stocks: { ...prev.stocks, health: prev.stocks.health === 'idle' ? 'idle' : 'loading' },
+    }))
+
     try {
-      const [cryptoData, stockPricesData] = await Promise.all([
+      const [cryptoData, stockData] = await Promise.all([
         fetchCryptoPrices(currentItems),
         fetchStockPricesData(currentItems),
       ])
@@ -453,25 +554,22 @@ export function DataProvider({ children }: DataProviderProps) {
           return prev
         }
 
-        const calculationResult = calculateTotals(
-          prev.netWorthItems,
-          prev.transactions,
-          cryptoData.cryptoPrices,
-          stockPricesData,
-          cryptoData.usdToChfRate
-        )
+        const refreshed = applyPriceRefresh(prev, cryptoData, stockData, { preserveOnEmpty: true })
 
         return {
           ...prev,
-          cryptoPrices: cryptoData.cryptoPrices,
-          stockPrices: stockPricesData,
-          usdToChfRate: cryptoData.usdToChfRate,
-          calculationResult,
+          ...refreshed,
         }
+      })
+      setMarketDataStatus({
+        crypto: cryptoData.status,
+        stocks: stockData.status,
       })
     } catch (err) {
       console.error('Error refreshing prices:', err)
       setError(err instanceof Error ? err.message : 'Failed to refresh prices')
+    } finally {
+      setIsRefreshingPrices(false)
     }
   }
 
@@ -575,6 +673,7 @@ export function DataProvider({ children }: DataProviderProps) {
       prevUidRef.current = uid
       hasLoadedDataRef.current = false
       setHasInitialDataLoaded(false)
+      setMarketDataStatus(createInitialMarketDataStatus())
     }
   }, [uid, setHasInitialDataLoaded])
 
@@ -662,7 +761,7 @@ export function DataProvider({ children }: DataProviderProps) {
       console.log('[DataContext] refreshAllData: Starting fetch (crypto prices, stock prices, perpetuals)')
       
       // Step 1: Fetch exchange prices (USD→CHF rate) and crypto/stock prices
-      const [cryptoData, stockPricesData] = await Promise.all([
+      const [cryptoData, stockData] = await Promise.all([
         fetchCryptoPrices(currentItems),
         fetchStockPricesData(currentItems),
       ])
@@ -691,15 +790,6 @@ export function DataProvider({ children }: DataProviderProps) {
       })
       
       // Step 3: Calculate totals
-      const calculationResult = calculateTotals(
-        itemsWithPerpetuals,
-        currentTransactions,
-        cryptoData.cryptoPrices,
-        stockPricesData,
-        cryptoData.usdToChfRate
-      )
-
-      // Step 5: Update frontend (single state update)
       setData((prev) => {
         console.log('[DataContext] refreshAllData: Updating state', {
           prevItemsCount: prev.netWorthItems.length,
@@ -718,15 +808,28 @@ export function DataProvider({ children }: DataProviderProps) {
             prevCategories: prev.netWorthItems.map(item => item.category),
           })
         }
+
+        const refreshed = applyPriceRefresh(prev, cryptoData, stockData, { preserveOnEmpty: true })
+        const calculationResult = calculateTotals(
+          itemsWithPerpetuals,
+          currentTransactions,
+          refreshed.cryptoPrices,
+          refreshed.stockPrices,
+          refreshed.usdToChfRate
+        )
         
         return {
           ...prev,
           netWorthItems: itemsWithPerpetuals,
-          cryptoPrices: cryptoData.cryptoPrices,
-          stockPrices: stockPricesData,
-          usdToChfRate: cryptoData.usdToChfRate,
+          cryptoPrices: refreshed.cryptoPrices,
+          stockPrices: refreshed.stockPrices,
+          usdToChfRate: refreshed.usdToChfRate,
           calculationResult,
         }
+      })
+      setMarketDataStatus({
+        crypto: cryptoData.status,
+        stocks: stockData.status,
       })
       
       console.log('[DataContext] refreshAllData: Completed successfully')
@@ -802,6 +905,8 @@ export function DataProvider({ children }: DataProviderProps) {
         loading,
         error,
         isInitialLoad: loading && !hasLoadedDataRef.current,
+        marketDataStatus,
+        isRefreshingPrices,
         mexcPositionsWs,
         mexcPositionsWsStatus,
         mexcPositionsWsError,
