@@ -1,6 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { initializeAdmin, verifyAuth } from '../_lib/firebaseAdmin.js'
-import { fetchCryptoPrices, fetchUsdToChfRate } from '../../lib/cryptoCompare.js'
+import { fetchCryptoPrices, fetchUsdToChfRate } from '../_lib/cryptoCompare.js'
 
 export const config = { maxDuration: 30 }
 

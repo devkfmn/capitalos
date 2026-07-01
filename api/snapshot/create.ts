@@ -3,7 +3,7 @@ import { initializeAdmin, verifyAuth, getDb, getAuthAdmin, type Firestore } from
 import { timingSafeEqual } from 'crypto'
 import type { NetWorthSummary, NetWorthItem, NetWorthCategory, NetWorthTransaction } from '../../lib/types.js'
 import { NetWorthCalculationService } from '../../lib/netWorthCalculation.js'
-import { fetchCryptoData } from '../../lib/cryptoCompare.js'
+import { fetchCryptoData } from '../_lib/cryptoCompare.js'
 import { fetchHyperliquidAccountEquity } from '../../lib/hyperliquidApi.js'
 import { fetchMexcAccountEquityUsd } from '../../lib/mexcApi.js'
 import { fetchStockPrices } from '../../lib/yahooFinance.js'
