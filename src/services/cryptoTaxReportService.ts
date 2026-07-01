@@ -63,7 +63,7 @@ export async function getYearsWithCryptoActivity(uid?: string): Promise<number[]
     }
   })
 
-  if (cryptoItems.length > 0) {
+  if (cryptoItems.some(i => !i.archived)) {
     years.add(new Date().getFullYear())
   }
 
@@ -91,6 +91,17 @@ function calculateBalanceAtTimestamp(
       if (tx.cryptoType === 'SELL' || (!tx.cryptoType && tx.side === 'sell')) return sum - tx.amount
       return sum
     }, 0)
+}
+
+function calculateAggregatedBalanceAtTimestamp(
+  itemIds: string[],
+  transactions: NetWorthTransaction[],
+  timestamp: number
+): number {
+  return itemIds.reduce(
+    (sum, id) => sum + calculateBalanceAtTimestamp(id, transactions, timestamp),
+    0
+  )
 }
 
 /**
@@ -231,6 +242,7 @@ export async function generateCryptoTaxReport(
     loadNetWorthTransactions<NetWorthTransaction>([], uid),
   ])
 
+  // All crypto items (active + archived) — archived items are hidden from net worth but kept for tax reporting
   const cryptoItems = items.filter(item => item.category === 'Crypto')
 
   const now = new Date()
@@ -242,21 +254,23 @@ export async function generateCryptoTaxReport(
     ? `${now.getDate().toString().padStart(2, '0')}.${(now.getMonth() + 1).toString().padStart(2, '0')}`
     : '31.12'
 
-  const coinMap = new Map<string, { item: NetWorthItem; transactions: NetWorthTransaction[] }>()
+  const coinMap = new Map<string, { itemIds: string[]; transactions: NetWorthTransaction[] }>()
 
   cryptoItems.forEach(item => {
     const itemTransactions = transactions.filter(tx => tx.itemId === item.id)
     const ticker = item.name.trim().toUpperCase()
 
     if (!coinMap.has(ticker)) {
-      coinMap.set(ticker, { item, transactions: [] })
+      coinMap.set(ticker, { itemIds: [item.id], transactions: [] })
+    } else {
+      coinMap.get(ticker)!.itemIds.push(item.id)
     }
     coinMap.get(ticker)!.transactions.push(...itemTransactions)
   })
 
   const coinReports: CoinReport[] = []
 
-  for (const [ticker, { item, transactions: coinTransactions }] of coinMap) {
+  for (const [ticker, { itemIds, transactions: coinTransactions }] of coinMap) {
     const yearTransactions = coinTransactions.filter(tx => {
       const txDate = new Date(tx.date)
       return !isNaN(txDate.getTime()) && txDate.getTime() >= yearStart && txDate.getTime() <= yearEnd
@@ -271,8 +285,8 @@ export async function generateCryptoTaxReport(
       ? yearTransactions.filter(tx => tx.cryptoType === 'ADJUSTMENT')
       : []
 
-    const balanceStart = calculateBalanceAtTimestamp(item.id, coinTransactions, yearStart)
-    const balanceEnd = calculateBalanceAtTimestamp(item.id, coinTransactions, yearEnd)
+    const balanceStart = calculateAggregatedBalanceAtTimestamp(itemIds, coinTransactions, yearStart)
+    const balanceEnd = calculateAggregatedBalanceAtTimestamp(itemIds, coinTransactions, yearEnd)
 
     const hasActivity = balanceStart !== 0 || balanceEnd !== 0
       || tradeTransactions.length > 0 || adjustmentTransactions.length > 0
@@ -326,7 +340,7 @@ export async function generateCryptoTaxReport(
 
     coinReports.push({
       coin: ticker,
-      coinName: item.name,
+      coinName: ticker,
       balanceStartOfYear: {
         amount: balanceStart,
         priceChf: priceStart,

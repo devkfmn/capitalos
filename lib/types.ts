@@ -22,6 +22,7 @@ export interface NetWorthItem {
   name?: string
   currency?: string
   monthlyDepreciationChf?: number
+  archived?: boolean
   perpetualsData?: {
     exchangeBalance?: Array<{ holdings?: number }>
   }

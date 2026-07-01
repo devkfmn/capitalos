@@ -30,6 +30,8 @@ export class NetWorthCalculationService {
     if (!cryptoPrices) cryptoPrices = {}
     if (!stockPrices) stockPrices = {}
 
+    const activeItems = netWorthItems.filter(item => !item.archived)
+
     const categoryTotals: Record<NetWorthCategory, number> = {
       Cash: 0,
       'Bank Accounts': 0,
@@ -43,7 +45,7 @@ export class NetWorthCalculationService {
       'Depreciating Assets': 0,
     }
 
-    netWorthItems.forEach((item: NetWorthItem) => {
+    activeItems.forEach((item: NetWorthItem) => {
       let balance: number
 
       if (item.category === 'Crypto') {

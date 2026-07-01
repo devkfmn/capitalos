@@ -16,6 +16,7 @@ import { fetchHyperliquidPerpetualsData } from '../services/hyperliquidService'
 import { MexcFuturesPositionsWs, type MexcWsStatus } from '../services/mexcFuturesPositionsWs'
 import { fetchMexcEquityUsd, fetchMexcOpenOrders, fetchMexcOpenPositions, fetchMexcUnrealizedPnlWindows } from '../services/mexcFuturesService'
 import type { ExchangeBalance, PerpetualsData, PerpetualsOpenPosition, PortfolioPnL } from '../pages/NetWorth'
+import { getActiveNetWorthItems } from '../lib/networth/activeItems'
 import { NetWorthCalculationService, type NetWorthCalculationResult } from '../services/netWorthCalculationService'
 import type { NetWorthItem, NetWorthTransaction } from '../pages/NetWorth'
 import type { InflowItem, OutflowItem } from '../pages/Cashflow'
@@ -132,7 +133,7 @@ export function DataProvider({ children }: DataProviderProps) {
     cryptoPrices: Record<string, number>
     usdToChfRate: number | null
   }> => {
-    const cryptoItems = items.filter((item) => item.category === 'Crypto')
+    const cryptoItems = getActiveNetWorthItems(items).filter((item) => item.category === 'Crypto')
     const tickers = cryptoItems.map((item) => item.name.trim().toUpperCase())
     const uniqueTickers = [...new Set(tickers)]
 
@@ -151,7 +152,7 @@ export function DataProvider({ children }: DataProviderProps) {
 
   // Fetch stock/index fund/commodity prices from daily Firestore cache
   const fetchStockPricesData = async (items: NetWorthItem[]): Promise<Record<string, number>> => {
-    const stockItems = items.filter((item) => categoryUsesMarketApi(item.category))
+    const stockItems = getActiveNetWorthItems(items).filter((item) => categoryUsesMarketApi(item.category))
 
     if (stockItems.length === 0) {
       console.log('[DataContext] fetchStockPricesData: No stock items found')

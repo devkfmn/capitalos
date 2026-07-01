@@ -16,6 +16,7 @@ import { useData } from '../contexts/DataContext'
 import { NetWorthCalculationService } from '../services/netWorthCalculationService'
 import { calculateBalanceChf, calculateCoinAmount, calculateHoldings, calculateAveragePricePerItem } from '../services/balanceCalculationService'
 import { DEFAULT_PLATFORMS } from '../constants/platforms'
+import { getActiveNetWorthItems } from '../lib/networth/activeItems'
 import {
   saveNetWorthItem,
   deleteNetWorthItem,
@@ -99,6 +100,7 @@ export interface NetWorthItem {
   currency: string
   monthlyDepreciationChf?: number // Only for Depreciating Assets category
   perpetualsData?: PerpetualsData // Only for Perpetuals category
+  archived?: boolean // Crypto: hidden from net worth but retained for tax reports
 }
 
 type TransactionSide = 'buy' | 'sell'
@@ -167,7 +169,7 @@ interface NetWorthCategorySectionProps {
   platforms: Platform[]
   onAddClick: () => void
   onAddTransaction: (itemId: string) => void
-  onRemoveItem: (itemId: string) => void
+  onRemoveItem: (itemId: string, mode: 'archive' | 'permanent') => void
   onShowTransactions: (itemId: string) => void
   onEditItem: (itemId: string) => void
 }
@@ -726,6 +728,7 @@ function NetWorthCategorySection({
                           <div className="flex-shrink-0 flex items-center pl-2 md:pl-3">
                             <ItemMenu
                               itemId={item.id}
+                              isCrypto={category === 'Crypto'}
                               onAddTransaction={onAddTransaction}
                               onShowTransactions={onShowTransactions}
                               onRemoveItem={onRemoveItem}
@@ -750,13 +753,14 @@ function NetWorthCategorySection({
 // Item Menu Component (3-dots)
 interface ItemMenuProps {
   itemId: string
+  isCrypto: boolean
   onAddTransaction: (itemId: string) => void
   onShowTransactions: (itemId: string) => void
-  onRemoveItem: (itemId: string) => void
+  onRemoveItem: (itemId: string, mode: 'archive' | 'permanent') => void
   onEditItem: (itemId: string) => void
 }
 
-function ItemMenu({ itemId, onAddTransaction, onShowTransactions, onRemoveItem, onEditItem }: ItemMenuProps) {
+function ItemMenu({ itemId, isCrypto, onAddTransaction, onShowTransactions, onRemoveItem, onEditItem }: ItemMenuProps) {
   const [menuOpen, setMenuOpen] = useState(false)
   const [menuPosition, setMenuPosition] = useState<{ x: number; y: number } | null>(null)
   const buttonRef = useRef<HTMLButtonElement>(null)
@@ -800,10 +804,22 @@ function ItemMenu({ itemId, onAddTransaction, onShowTransactions, onRemoveItem, 
     onShowTransactions(itemId)
   }
 
+  const handleHideFromNetWorth = () => {
+    setMenuOpen(false)
+    setMenuPosition(null)
+    onRemoveItem(itemId, 'archive')
+  }
+
+  const handlePermanentDelete = () => {
+    setMenuOpen(false)
+    setMenuPosition(null)
+    onRemoveItem(itemId, 'permanent')
+  }
+
   const handleRemove = () => {
     setMenuOpen(false)
     setMenuPosition(null)
-    onRemoveItem(itemId)
+    onRemoveItem(itemId, 'permanent')
   }
 
   const handleEdit = () => {
@@ -827,7 +843,7 @@ function ItemMenu({ itemId, onAddTransaction, onShowTransactions, onRemoveItem, 
       {menuOpen && menuPosition && (
         <div
           ref={menuRef}
-          className="fixed z-[100] bg-bg-surface-1 border border-border-strong rounded-card shadow-card p-2 min-w-[160px]"
+          className="fixed z-[100] bg-bg-surface-1 border border-border-strong rounded-card shadow-card p-2 min-w-[180px]"
           style={{ left: menuPosition.x, top: menuPosition.y }}
         >
           <button
@@ -848,12 +864,29 @@ function ItemMenu({ itemId, onAddTransaction, onShowTransactions, onRemoveItem, 
           >
             Show Transactions
           </button>
-          <button
-            onClick={handleRemove}
-            className="w-full text-left px-3 py-1.5 text-danger text-[0.567rem] md:text-xs hover:bg-bg-surface-2 transition-colors rounded-input"
-          >
-            Remove
-          </button>
+          {isCrypto ? (
+            <>
+              <button
+                onClick={handleHideFromNetWorth}
+                className="w-full text-left px-3 py-1.5 text-text-primary text-[0.567rem] md:text-xs hover:bg-bg-surface-2 transition-colors rounded-input"
+              >
+                Hide from net worth
+              </button>
+              <button
+                onClick={handlePermanentDelete}
+                className="w-full text-left px-3 py-1.5 text-danger text-[0.567rem] md:text-xs hover:bg-bg-surface-2 transition-colors rounded-input"
+              >
+                Delete permanently…
+              </button>
+            </>
+          ) : (
+            <button
+              onClick={handleRemove}
+              className="w-full text-left px-3 py-1.5 text-danger text-[0.567rem] md:text-xs hover:bg-bg-surface-2 transition-colors rounded-input"
+            >
+              Remove
+            </button>
+          )}
         </div>
       )}
     </>
@@ -956,7 +989,7 @@ function NetWorth() {
 
   const groupedItems = useMemo(
     () =>
-      netWorthItems.reduce(
+      getActiveNetWorthItems(netWorthItems).reduce(
         (acc, item) => {
           if (!acc[item.category]) {
             acc[item.category] = []
@@ -1197,51 +1230,88 @@ function NetWorth() {
     }
   }
 
-  const handleRemoveItem = async (itemId: string) => {
-    if (window.confirm('Are you sure you want to remove this item? All associated transactions will also be removed.')) {
-      // Find the existing item to get its updatedAt timestamp for conflict detection
-      const existingItem = netWorthItems.find(item => item.id === itemId)
-      const clientUpdatedAt = toDateSafe(existingItem?.updatedAt)
+  const permanentlyDeleteItem = async (itemId: string, existingItem: NetWorthItem) => {
+    const clientUpdatedAt = toDateSafe(existingItem.updatedAt)
+    const transactionsToDelete = transactions.filter(tx => tx.itemId === itemId)
 
-      // Find all transactions for this item
-      const transactionsToDelete = transactions.filter(tx => tx.itemId === itemId)
+    setNetWorthItems((prev) => prev.filter(i => i.id !== itemId))
+    setTransactions((prev) => prev.filter(tx => tx.itemId !== itemId))
 
-      // Update local state immediately (optimistic update)
-      setNetWorthItems((prev) => prev.filter(i => i.id !== itemId))
-      setTransactions((prev) => prev.filter(tx => tx.itemId !== itemId))
-      
-      if (uid) {
-        const itemResult = await deleteNetWorthItem<NetWorthItem>(itemId, uid, {
-          clientUpdatedAt,
+    if (!uid) return
+
+    const itemResult = await deleteNetWorthItem<NetWorthItem>(itemId, uid, {
+      clientUpdatedAt,
+    })
+    if (itemResult.success && itemResult.entries) {
+      setNetWorthItems(itemResult.entries)
+    } else if (!itemResult.success) {
+      console.error('[NetWorth] Failed to delete item:', itemResult.reason)
+      addToast('Failed to save changes. Please try again.')
+    }
+
+    let latestTransactions: NetWorthTransaction[] | undefined
+    await Promise.all(
+      transactionsToDelete.map(async (tx) => {
+        const txClientUpdatedAt = toDateSafe(tx.updatedAt)
+        const result = await deleteNetWorthTransaction<NetWorthTransaction>(tx.id, uid, {
+          clientUpdatedAt: txClientUpdatedAt,
         })
-        if (itemResult.success && itemResult.entries) {
-          setNetWorthItems(itemResult.entries)
-        } else if (!itemResult.success) {
-          console.error('[NetWorth] Failed to delete item:', itemResult.reason)
+        if (result.success && result.entries) {
+          latestTransactions = result.entries
+        } else if (!result.success) {
+          console.error(`[NetWorth] Failed to delete transaction ${tx.id}:`, result.reason)
           addToast('Failed to save changes. Please try again.')
         }
-
-        let latestTransactions: NetWorthTransaction[] | undefined
-        await Promise.all(
-          transactionsToDelete.map(async (tx) => {
-            const txClientUpdatedAt = toDateSafe(tx.updatedAt)
-            const result = await deleteNetWorthTransaction<NetWorthTransaction>(tx.id, uid, {
-              clientUpdatedAt: txClientUpdatedAt,
-            })
-            if (result.success && result.entries) {
-              latestTransactions = result.entries
-            } else if (!result.success) {
-              console.error(`[NetWorth] Failed to delete transaction ${tx.id}:`, result.reason)
-              addToast('Failed to save changes. Please try again.')
-            }
-          })
-        )
-        if (latestTransactions) {
-          setTransactions(latestTransactions)
-        }
-        void reloadFromFirestore()
-      }
+      })
+    )
+    if (latestTransactions) {
+      setTransactions(latestTransactions)
     }
+    void reloadFromFirestore()
+  }
+
+  const handleRemoveItem = async (itemId: string, mode: 'archive' | 'permanent') => {
+    const existingItem = netWorthItems.find(item => item.id === itemId)
+    if (!existingItem) return
+
+    const isCrypto = existingItem.category === 'Crypto'
+
+    if (mode === 'archive') {
+      if (!isCrypto) return
+      const confirmed = window.confirm(
+        'Hide this coin from your net worth? It will no longer appear on the dashboard, but its transaction history will still be included in tax reports.'
+      )
+      if (!confirmed) return
+
+      const clientUpdatedAt = toDateSafe(existingItem.updatedAt)
+      const archivedItem: NetWorthItem = { ...existingItem, archived: true }
+      setNetWorthItems((prev) =>
+        prev.map((i) => (i.id === itemId ? archivedItem : i))
+      )
+
+      if (uid) {
+        const cleanedItem = removeUndefined(archivedItem) as NetWorthItem
+        const result = await saveNetWorthItem(cleanedItem, uid, { clientUpdatedAt })
+        if (result.success && result.entries) {
+          setNetWorthItems(result.entries as NetWorthItem[])
+          void reloadFromFirestore()
+        } else if (!result.success) {
+          console.error('[NetWorth] Failed to archive item:', result.reason)
+          addToast('Failed to save changes. Please try again.')
+        }
+      }
+      return
+    }
+
+    const coinLabel = existingItem.name?.trim() || 'this coin'
+    const confirmed = window.confirm(
+      isCrypto
+        ? `Permanently delete ${coinLabel} and ALL its transactions?\n\nThis cannot be undone. The coin and its full history will be removed from net worth and tax reports.`
+        : 'Are you sure you want to remove this item? All associated transactions will also be removed.'
+    )
+    if (!confirmed) return
+
+    await permanentlyDeleteItem(itemId, existingItem)
   }
 
   const handleShowTransactions = (itemId: string) => {

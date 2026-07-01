@@ -6,6 +6,7 @@ This directory contains **Layer‑2 deterministic specifications** describing th
 
 - `transactions.spec.md`: Net Worth transaction model, allowed number formats, create/edit/delete flows, validation messages, persistence, and conflict semantics.
 - `net-worth.spec.md`: Net worth categories, item/holding derivation from transactions, category/total computation rules, currency conversion order, and missing-price fallbacks.
+- `crypto-tax-report.spec.md`: Swiss crypto tax report modes, year selection, same-ticker aggregation, archive vs permanent delete.
 - `cashflow.spec.md`: Cashflow inflow/outflow models, accountflow mapping semantics, monthly rollups (Dashboard vs Cashflow), spare-change logic, and persistence.
 - `market-data.spec.md`: FX/crypto/stock market data sources, caching and refresh behavior, rate limiting, error handling, and snapshot-consistency caveats.
 - `valuation-engine.spec.md`: Valuation SSOT entry points (legacy vs new engine), step ordering, conversion order, and which pages/flows actually consume which engine today.

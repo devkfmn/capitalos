@@ -1,3 +1,4 @@
+import { getActiveNetWorthItems } from '../lib/networth/activeItems'
 import type { ForecastEntry } from './storageService'
 import type { NetWorthItem, NetWorthTransaction } from '../pages/NetWorth'
 import type { InflowItem, OutflowItem } from '../pages/Cashflow'
@@ -81,7 +82,7 @@ export function getPlatformBalance(
   if (!cryptoPrices) cryptoPrices = {}
   if (!stockPrices) stockPrices = {}
   const platformMatch = platformName || platformId
-  const platformItems = netWorthItems.filter(item => item.platform === platformMatch)
+  const platformItems = getActiveNetWorthItems(netWorthItems).filter(item => item.platform === platformMatch)
   
   if (platformItems.length === 0) {
     return 0

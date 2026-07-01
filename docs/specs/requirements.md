@@ -27,7 +27,7 @@ Capitalos is a unified wealth management web application. It tracks total net wo
 - **Settings**: Account management, API keys (Hyperliquid wallet, MEXC API/Secret), platforms list, data import/export (backup), theme, incognito toggle.
 - **Auth**: Login via email/password or Google (Firebase Auth). Account creation with email/password. Password reset via email. Logout. No unauthenticated access to user data.
 - **Snapshots**: Create and store net worth snapshots (by date); used for PnL and Net Worth Evolution. Snapshot API: POST `/api/snapshot/create` with `uid` (body or query); creates snapshot in CHF with category breakdown; requires Firebase service account in env.
-- **Tax**: Crypto tax report generation (modal and service); PDF export where implemented.
+- **Tax**: Crypto tax report generation (Settings → Reports); standard PDF (buys/sells) and detailed PDF (+ adjustments). Crypto removal offers hide-from-net-worth (archive, retained for reports) or permanent delete.
 - **PWA**: Progressive Web App support (Vite PWA plugin); offline capability as provided by current implementation.
 
 ## 5. Explicitly Out-of-Scope Features
