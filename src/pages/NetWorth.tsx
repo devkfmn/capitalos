@@ -14,6 +14,7 @@ import { fetchCryptoPrices } from '../services/cryptoCompareService'
 import { getDailyPricesMap } from '../services/market-data/DailyPriceService'
 import { useData } from '../contexts/DataContext'
 import MarketDataWarningBanner from '../components/MarketDataWarningBanner'
+import SnapshotWarningBanner from '../components/SnapshotWarningBanner'
 import { NetWorthCalculationService } from '../services/netWorthCalculationService'
 import { calculateBalanceChf, calculateCoinAmount, calculateHoldings, calculateAveragePricePerItem } from '../services/balanceCalculationService'
 import { DEFAULT_PLATFORMS } from '../constants/platforms'
@@ -1388,6 +1389,7 @@ function NetWorth() {
         <Heading level={1}>Net Worth</Heading>
 
         <MarketDataWarningBanner />
+        <SnapshotWarningBanner />
         
         {/* Total Net Worth */}
         <div className="bg-bg-frame border border-border-subtle rounded-card shadow-card px-3 py-3 lg:p-6">

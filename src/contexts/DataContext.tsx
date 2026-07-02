@@ -9,7 +9,8 @@ import {
   loadCashflowInflowItems,
   loadCashflowOutflowItems,
 } from '../services/storageService'
-import { loadSnapshots, type NetWorthSnapshot } from '../services/snapshotService'
+import { loadSnapshots, type NetWorthSnapshot, type SnapshotMeta } from '../services/snapshotService'
+import { loadUserSettings } from '../lib/dataSafety/userSettingsRepo'
 import { fetchCryptoData } from '../services/cryptoCompareService'
 import { fetchDailyPricesData, categoryUsesMarketApi } from '../services/market-data/DailyPriceService'
 import {
@@ -54,6 +55,7 @@ interface DataContextType {
   refreshPrices: () => Promise<void>
   refreshPerpetuals: () => Promise<void>
   reloadFromFirestore: () => Promise<void>
+  snapshotMeta: SnapshotMeta | null
 }
 
 const DataContext = createContext<DataContextType | undefined>(undefined)
@@ -100,6 +102,7 @@ export function DataProvider({ children }: DataProviderProps) {
   const [error, setError] = useState<string | null>(null)
   const [marketDataStatus, setMarketDataStatus] = useState<MarketDataStatus>(createInitialMarketDataStatus())
   const [isRefreshingPrices, setIsRefreshingPrices] = useState(false)
+  const [snapshotMeta, setSnapshotMeta] = useState<SnapshotMeta | null>(null)
   // Use ref for WebSocket state to prevent re-renders on every update
   const mexcWsStatusRef = useRef<MexcWsStatus>('disconnected')
   const mexcWsPositionsMapRef = useRef<Map<string, PerpetualsOpenPosition>>(new Map())
@@ -122,13 +125,16 @@ export function DataProvider({ children }: DataProviderProps) {
       throw new Error('User ID is required')
     }
 
-    const [items, txs, inflow, outflow, loadedSnapshots] = await Promise.all([
+    const [items, txs, inflow, outflow, loadedSnapshots, settings] = await Promise.all([
       loadNetWorthItems([], uid),
       loadNetWorthTransactions([], uid),
       loadCashflowInflowItems([], uid),
       loadCashflowOutflowItems([], uid),
       loadSnapshots(uid),
+      loadUserSettings(uid),
     ])
+
+    setSnapshotMeta(settings?.snapshotMeta ?? null)
 
     return {
       items,
@@ -914,6 +920,7 @@ export function DataProvider({ children }: DataProviderProps) {
         refreshPrices,
         refreshPerpetuals,
         reloadFromFirestore,
+        snapshotMeta,
       }}
     >
       {children}

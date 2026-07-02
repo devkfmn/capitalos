@@ -9,6 +9,18 @@ export interface NetWorthSnapshot {
   timestamp: number
   categories: Record<NetWorthCategory, number>
   total: number
+  /** Present on server-created snapshots; absent on legacy/degraded docs */
+  priceQuality?: 'live'
+}
+
+export type SnapshotMetaStatus = 'created' | 'exists' | 'skipped_no_live_prices' | 'error'
+
+export interface SnapshotMeta {
+  lastDate: string
+  lastStatus: SnapshotMetaStatus
+  lastAttemptAt: number
+  lastError?: string
+  missingTickers?: string[]
 }
 
 const SNAPSHOTS_STORAGE_KEY = 'capitalos_net_worth_snapshots_v1'
@@ -123,6 +135,20 @@ export function createSnapshot(
  */
 export function hasSnapshotForDate(snapshots: NetWorthSnapshot[], date: string): boolean {
   return snapshots.some(s => s.date === date)
+}
+
+/**
+ * Returns true if a live-quality snapshot exists for the given date.
+ */
+export function hasLiveSnapshotForDate(snapshots: NetWorthSnapshot[], date: string): boolean {
+  return snapshots.some(s => s.date === date && s.priceQuality === 'live')
+}
+
+/**
+ * Returns true if a degraded (non-live) snapshot exists for the given date.
+ */
+export function isDegradedSnapshot(snapshot: NetWorthSnapshot): boolean {
+  return snapshot.priceQuality !== 'live'
 }
 
 /**

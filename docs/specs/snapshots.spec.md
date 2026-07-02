@@ -21,6 +21,7 @@ Fields:
 - **`timestamp`** (number): Unix timestamp in milliseconds
 - **`categories`** (`Record<NetWorthCategory, number>`): category totals
 - **`total`** (number): total net worth
+- **`priceQuality`** (optional string): MUST be `'live'` on server-created snapshots. Absent on legacy docs = degraded / eligible for overwrite.
 
 ### Snapshot document id
 Snapshots are stored in Firestore with document id equal to `snapshot.date`.
@@ -87,11 +88,27 @@ Flow:
 
 ## Behavioral Rules (MUST / MUST NOT)
 
+### Live market prices (MUST)
+- Persisted snapshots MUST use **live** market prices for Crypto, Index Funds, Stocks, and Commodities holdings.
+- Transaction-derived fallback valuations (used on Dashboard when live prices fail) MUST NOT be written to Firestore.
+- If required live prices are unavailable, the server endpoint MUST NOT write a snapshot for that date and MUST record the failure in `snapshotMeta` (see below).
+- When crypto items exist, a valid USD→CHF rate MUST be available for conversion.
+
 ### Uniqueness / idempotency
-- There MUST be at most one snapshot per user per `date` (UTC day key).
+- There MUST be at most one **live** snapshot per user per `date` (UTC day key).
 - The server endpoint MUST be idempotent per date:
-  - If a snapshot document already exists for that date, it returns HTTP 200 success and does **not** overwrite.
-  - Source: `api/snapshot/create.ts` checks document existence and "skips creation".
+  - If a snapshot document already exists for that date with `priceQuality: 'live'`, it returns HTTP 200 success and does **not** overwrite.
+  - If a snapshot exists for that date but lacks `priceQuality: 'live'` (legacy or degraded), a new run MAY overwrite it with a live snapshot.
+  - Source: `api/snapshot/create.ts` checks document existence and quality before writing.
+
+### Snapshot run metadata (`snapshotMeta`)
+Stored on `users/{uid}/settings/user` → field `snapshotMeta`:
+
+- **`lastDate`** (string): UTC `YYYY-MM-DD` of the last attempt
+- **`lastStatus`**: `created` | `exists` | `skipped_no_live_prices` | `error`
+- **`lastAttemptAt`** (number): Unix ms
+- **`lastError`** (optional string): human-readable reason when skipped or failed
+- **`missingTickers`** (optional string[]): tickers that lacked live prices
 
 ### Date and timestamp semantics (server endpoint)
 Source: `api/snapshot/create.ts`.
@@ -143,6 +160,7 @@ Involved code:
 - Invalid/missing Firebase token (POST) returns:
   - HTTP 401 JSON `{ error: 'Missing or invalid Authorization header.' }`
 - Per-user errors during cron are caught individually and included in the results array with `status: 'error'`.
+- Per-user live-price failures return `status: 'skipped_no_live_prices'` (no snapshot written, `snapshotMeta` updated).
 - Unexpected errors return:
   - HTTP 500 JSON `{ success: false, error: <message> }`
 
@@ -187,20 +205,25 @@ Source: `src/services/snapshotService.ts` (`SNAPSHOTS_STORAGE_KEY`).
    - `POST /api/snapshot/create` without valid Firebase token MUST return HTTP 401.
    - `POST /api/snapshot/create` with valid Firebase token MUST create a snapshot for the authenticated user only.
 4. **Idempotency**:
-   - Creating a snapshot twice for the same day MUST return success both times and MUST NOT change the stored snapshot on the second call.
-5. **Execution-time timestamp**:
+   - Creating a snapshot twice for the same day when the first has `priceQuality: 'live'` MUST return success both times and MUST NOT change the stored snapshot on the second call.
+5. **Live-price guard**:
+   - When required live prices are missing, the endpoint MUST NOT write a snapshot and MUST return `skipped_no_live_prices`.
+6. **Degraded overwrite**:
+   - A snapshot without `priceQuality: 'live'` MAY be replaced by a subsequent successful run for the same date.
+7. **Execution-time timestamp**:
    - A created snapshot's `timestamp` MUST match server execution time at snapshot creation and MUST NOT be a synthetic end-of-day timestamp.
-6. **No financial data in cron response**:
+8. **No financial data in cron response**:
    - `GET` response MUST NOT contain `categories` or `total` fields.
 
 ## Shared Libraries
 
-The snapshot handler calls external APIs directly (no internal HTTP roundtrips), ensuring cron snapshots include full data regardless of auth context:
+The snapshot handler calls external APIs directly (no internal HTTP roundtrips), ensuring cron snapshots include full data regardless of auth context. Server-side calculation helpers live under `api/_lib/` (CommonJS bundle) — not root `lib/`:
 
-- `lib/hyperliquidApi.ts` → `fetchHyperliquidAccountEquity(walletAddress)` — calls Hyperliquid API directly for account equity across all DEXs.
-- `lib/mexcApi.ts` → `fetchMexcAccountEquityUsd(apiKey, secretKey)` — calls MEXC contract API directly for futures account equity.
-- `lib/yahooFinance.ts` → `fetchStockPrices(symbols)` — calls Yahoo Finance directly for stock/index/commodity prices.
-- `lib/cryptoCompare.ts` → `fetchCryptoData(tickers, apiKey)` — calls CryptoCompare for crypto prices (server-side with `CRYPTOCOMPARE_API_KEY`).
+- `api/_lib/hyperliquidApi.ts` → `fetchHyperliquidAccountEquity(walletAddress)` — calls Hyperliquid API directly for account equity across all DEXs.
+- `api/_lib/mexcEquity.ts` → `fetchMexcAccountEquityUsd(apiKey, secretKey)` — calls MEXC contract API directly for futures account equity.
+- `api/_lib/yahooFinance.ts` → `fetchStockPrices(symbols)` — calls Yahoo Finance directly for stock/index/commodity prices.
+- `api/_lib/cryptoCompare.ts` → `fetchCryptoData(tickers, apiKey)` — calls CryptoCompare for crypto prices (server-side with `CRYPTOCOMPARE_API_KEY`).
+- `api/_lib/netWorthCalculation.ts` → `NetWorthCalculationService.calculateTotals(...)` — same logic as `lib/netWorthCalculation.ts`.
 
 ## Future Notes (optional, clearly marked as PROPOSAL)
 **PROPOSAL**: Add deterministic cleanup/retention and expose snapshot creation results in the Settings UI (including "already exists" outcome).

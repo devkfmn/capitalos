@@ -281,8 +281,9 @@ Involved code:
    - When exchange rates were fetched within last 24h for same base, `getExchangeRates(base)` MUST return cached values without network call (can be asserted by network interception).
 2. **Yahoo rate limit**:
    - Two back-to-back Yahoo Finance fetches MUST be delayed by at least 1 second.
-3. **CryptoCompare failure fallback**:
-   - If CryptoCompare requests fail, net worth calculations MUST still render finite totals (using transaction-derived valuations).
+3. **CryptoCompare failure fallback (display only)**:
+   - If CryptoCompare requests fail, net worth **display** MUST still render finite totals (using transaction-derived valuations).
+   - Persisted net worth **snapshots** MUST NOT use this fallback — see `docs/specs/snapshots.spec.md` (live-price guard).
 4. **UI visibility on failure**:
    - When crypto or stock health is `error` or `partial` and the user has market-driven items, wealth pages MUST show `MarketDataWarningBanner`.
 5. **Refresh safety**:

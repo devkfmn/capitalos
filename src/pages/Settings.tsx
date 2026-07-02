@@ -25,7 +25,8 @@ import {
 } from '../services/storageService'
 import { getYearsWithCryptoActivity, generateCryptoTaxReport } from '../services/cryptoTaxReportService'
 import { generateCryptoTaxReportPDF } from '../services/pdfService'
-import { saveSnapshots, hasSnapshotForDate, createSnapshot, getTodayUTCDate, getToday2359UTCTimestamp } from '../services/snapshotService'
+import { saveSnapshots, hasSnapshotForDate, hasLiveSnapshotForDate, createSnapshot, getTodayUTCDate, getToday2359UTCTimestamp } from '../services/snapshotService'
+import { useMarketDataHealth } from '../hooks/useMarketDataHealth'
 import { isBiometricAvailable, isBiometricEnabled, registerBiometric, disableBiometric } from '../services/webAuthnService'
 
 function Settings() {
@@ -41,7 +42,8 @@ function Settings() {
     setMexcSecretKey,
     isLoading: apiKeysLoading 
   } = useApiKeys()
-  const { data, reloadFromFirestore } = useData()
+  const { data, reloadFromFirestore, snapshotMeta } = useData()
+  const marketDataHealth = useMarketDataHealth()
   const [exportLoading, setExportLoading] = useState(false)
   const [exportError, setExportError] = useState<string | null>(null)
   const [exportSuccess, setExportSuccess] = useState(false)
@@ -79,6 +81,7 @@ function Settings() {
   const [creatingSnapshot, setCreatingSnapshot] = useState(false)
   const [snapshotError, setSnapshotError] = useState<string | null>(null)
   const [snapshotSuccess, setSnapshotSuccess] = useState(false)
+  const [snapshotSuccessMessage, setSnapshotSuccessMessage] = useState('')
   // Theme
   const [themeSaving, setThemeSaving] = useState(false)
   const [themeError, setThemeError] = useState<string | null>(null)
@@ -470,8 +473,16 @@ function Settings() {
     setCreatingSnapshot(true)
     setSnapshotError(null)
     setSnapshotSuccess(false)
+    setSnapshotSuccessMessage('')
 
     try {
+      if (marketDataHealth.severity !== 'none') {
+        const detail = marketDataHealth.messages.join(' ')
+        throw new Error(
+          detail || 'Live market prices are unavailable. Resolve market data issues before creating a snapshot.'
+        )
+      }
+
       // Get data from DataContext
       const { snapshots, netWorthItems, transactions, cryptoPrices, stockPrices, usdToChfRate } = data
 
@@ -482,12 +493,13 @@ function Settings() {
       // Get today's date in UTC
       const todayDate = getTodayUTCDate()
 
-      // Check if snapshot already exists for this date
-      if (hasSnapshotForDate(snapshots, todayDate)) {
-        setSnapshotError(`A snapshot already exists for ${todayDate}.`)
+      if (hasLiveSnapshotForDate(snapshots, todayDate)) {
+        setSnapshotError(`A live snapshot already exists for ${todayDate}.`)
         setTimeout(() => setSnapshotError(null), 5000)
         return
       }
+
+      const replacingDegraded = hasSnapshotForDate(snapshots, todayDate)
 
       // Create snapshot using the same calculation logic as the frontend
       const newSnapshot = createSnapshot(
@@ -499,18 +511,30 @@ function Settings() {
         usdToChfRate
       )
 
+      newSnapshot.priceQuality = 'live'
+
       // Override timestamp to be end of day UTC for consistency
       newSnapshot.timestamp = getToday2359UTCTimestamp()
 
-      // Add the new snapshot to the existing snapshots and save
-      const updatedSnapshots = [...snapshots, newSnapshot]
+      // Add or replace snapshot for today
+      const updatedSnapshots = replacingDegraded
+        ? snapshots.map((s) => (s.date === todayDate ? newSnapshot : s))
+        : [...snapshots, newSnapshot]
       await saveSnapshots(updatedSnapshots, uid)
 
       // Reflect the new snapshot in shared context so Dashboard chart/PnL update
       void reloadFromFirestore()
 
+      setSnapshotSuccessMessage(
+        replacingDegraded
+          ? `Snapshot for ${todayDate} replaced with live market values.`
+          : 'Snapshot created successfully with live market values.'
+      )
       setSnapshotSuccess(true)
-      setTimeout(() => setSnapshotSuccess(false), 5000)
+      setTimeout(() => {
+        setSnapshotSuccess(false)
+        setSnapshotSuccessMessage('')
+      }, 5000)
     } catch (error) {
       console.error('Snapshot creation error:', error)
       const errorMessage = error instanceof Error ? error.message : 'Failed to create snapshot'
@@ -1159,12 +1183,24 @@ function Settings() {
             <div>
               <Heading level={3} className="mb-2 text-text-secondary">Create Snapshot</Heading>
               <p className="text-text-muted text-[0.567rem] md:text-xs mb-4">
-                Manually create a snapshot of your current net worth. This will calculate and store the total value of all categories in CHF.
+                Manually create a snapshot of your current net worth using live market prices. Blocked while market data warnings are active.
               </p>
+
+              {snapshotMeta && (
+                <div className="text-text-muted text-[0.567rem] md:text-xs mb-4 bg-bg-surface-2 border border-border-subtle rounded-input px-3 py-2">
+                  <p>
+                    Last automatic snapshot attempt ({snapshotMeta.lastDate}):{' '}
+                    <span className="text-text-secondary">{snapshotMeta.lastStatus.replace(/_/g, ' ')}</span>
+                  </p>
+                  {snapshotMeta.lastError && (
+                    <p className="mt-1 text-danger">{snapshotMeta.lastError}</p>
+                  )}
+                </div>
+              )}
 
               <button
                 onClick={handleCreateSnapshot}
-                disabled={creatingSnapshot || !uid}
+                disabled={creatingSnapshot || !uid || marketDataHealth.severity !== 'none'}
                 className="w-full py-2 px-4 bg-gradient-to-r from-[#DAA520] to-[#B87333] hover:from-[#F0C850] hover:to-[#D4943F] text-[#050A1A] text-[0.567rem] md:text-xs font-semibold rounded-full transition-all duration-200 shadow-card hover:shadow-lg disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {creatingSnapshot ? 'Creating Snapshot...' : 'Create Snapshot'}
@@ -1180,7 +1216,7 @@ function Settings() {
                   )}
                   {snapshotSuccess && (
                     <div className="text-[0.567rem] md:text-xs text-success bg-bg-surface-2 border border-success/40 rounded-input px-3 py-2">
-                      Snapshot created successfully!
+                      {snapshotSuccessMessage || 'Snapshot created successfully!'}
                     </div>
                   )}
                 </div>

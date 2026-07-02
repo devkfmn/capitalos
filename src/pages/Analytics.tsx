@@ -8,6 +8,7 @@ import { useCurrency } from '../contexts/CurrencyContext'
 import { useIncognito } from '../contexts/IncognitoContext'
 import { useData } from '../contexts/DataContext'
 import MarketDataWarningBanner from '../components/MarketDataWarningBanner'
+import SnapshotWarningBanner from '../components/SnapshotWarningBanner'
 import { formatMoney } from '../lib/currency'
 import { toDateSafe } from '../lib/firestoreSafeWrite'
 import {
@@ -523,6 +524,7 @@ function Analytics() {
         <Heading level={1}>Analytics</Heading>
 
         <MarketDataWarningBanner />
+        <SnapshotWarningBanner />
 
         <div className="bg-bg-frame border border-border-subtle rounded-card shadow-card px-3 py-3 lg:p-6">
           <div className="mb-6 pb-4 border-b border-border-strong">

@@ -1,12 +1,13 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { initializeAdmin, verifyAuth, getDb, getAuthAdmin, type Firestore } from '../_lib/firebaseAdmin.js'
 import { timingSafeEqual } from 'crypto'
-import type { NetWorthSummary, NetWorthItem, NetWorthCategory, NetWorthTransaction } from '../../lib/types.js'
-import { NetWorthCalculationService } from '../../lib/netWorthCalculation.js'
-import { fetchCryptoData } from '../_lib/cryptoCompare.js'
-import { fetchHyperliquidAccountEquity } from '../../lib/hyperliquidApi.js'
-import { fetchMexcAccountEquityUsd } from '../../lib/mexcApi.js'
-import { fetchStockPrices } from '../../lib/yahooFinance.js'
+import type { NetWorthSummary, NetWorthItem, NetWorthCategory, NetWorthTransaction } from '../_lib/types.js'
+import { NetWorthCalculationService } from '../_lib/netWorthCalculation.js'
+import { fetchCryptoDataForSnapshot } from '../_lib/cryptoCompare.js'
+import { fetchHyperliquidAccountEquity } from '../_lib/hyperliquidApi.js'
+import { fetchMexcAccountEquityUsd } from '../_lib/mexcEquity.js'
+import { fetchStockPrices } from '../_lib/yahooFinance.js'
+import { validateSnapshotPrices } from '../_lib/snapshotPriceValidation.js'
 
 export const config = {
   maxDuration: 60,
@@ -19,8 +20,6 @@ async function verifyFirebaseAuth(req: VercelRequest, res: VercelResponse): Prom
 function safeStringEquals(a: string, b: string): boolean {
   const bufA = Buffer.from(a)
   const bufB = Buffer.from(b)
-  // timingSafeEqual requires equal-length buffers; the length check itself is
-  // not secret-dependent, so comparing lengths first is acceptable.
   if (bufA.length !== bufB.length) return false
   return timingSafeEqual(bufA, bufB)
 }
@@ -38,6 +37,7 @@ interface NetWorthSnapshot {
   timestamp: number
   categories: Record<string, number>
   total: number
+  priceQuality: 'live'
 }
 
 type ApiKeys = {
@@ -49,6 +49,16 @@ type ApiKeys = {
 type ExchangeRates = {
   base: string
   rates: Record<string, number>
+}
+
+export type SnapshotMetaStatus = 'created' | 'exists' | 'skipped_no_live_prices' | 'error'
+
+export interface SnapshotMeta {
+  lastDate: string
+  lastStatus: SnapshotMetaStatus
+  lastAttemptAt: number
+  lastError?: string
+  missingTickers?: string[]
 }
 
 const SNAPSHOT_CATEGORIES: NetWorthCategory[] = [
@@ -104,7 +114,7 @@ function formatUtcDateYmd(parts: { year: number; monthIndex: number; day: number
   return `${parts.year}-${month}-${day}`
 }
 
-function summaryToSnapshot(summary: NetWorthSummary): NetWorthSnapshot {
+function summaryToSnapshot(summary: NetWorthSummary): Omit<NetWorthSnapshot, 'priceQuality'> {
   const byKey = new Map<string, number>()
   for (const cat of summary.categories || []) {
     if (cat && typeof (cat as any).categoryKey === 'string') {
@@ -133,11 +143,21 @@ function getSnapshotDateAndTimestamp(): { date: string; timestamp: number } {
   return { date: formatUtcDateYmd(target), timestamp: now.getTime() }
 }
 
+async function writeSnapshotMeta(
+  uid: string,
+  db: Firestore,
+  meta: SnapshotMeta
+): Promise<void> {
+  const settingsRef = db.collection('users').doc(uid).collection('settings').doc('user')
+  await settingsRef.set({ snapshotMeta: meta }, { merge: true })
+}
+
 interface SnapshotResult {
   uid: string
   date: string
-  status: 'created' | 'exists' | 'error'
+  status: SnapshotMetaStatus
   error?: string
+  replacedDegraded?: boolean
 }
 
 async function createSnapshotForUser(
@@ -145,11 +165,23 @@ async function createSnapshotForUser(
   db: Firestore,
 ): Promise<SnapshotResult> {
   const { date, timestamp } = getSnapshotDateAndTimestamp()
+  const attemptedAt = Date.now()
 
   const existingRef = db.collection(`users/${uid}/snapshots`).doc(date)
   const existing = await existingRef.get()
+  let replacedDegraded = false
+
   if (existing.exists) {
-    return { uid, date, status: 'exists' }
+    const existingData = existing.data()
+    if (existingData?.priceQuality === 'live') {
+      await writeSnapshotMeta(uid, db, {
+        lastDate: date,
+        lastStatus: 'exists',
+        lastAttemptAt: attemptedAt,
+      })
+      return { uid, date, status: 'exists' }
+    }
+    replacedDegraded = true
   }
 
   const settingsSnap = await db.collection('users').doc(uid).collection('settings').doc('user').get()
@@ -168,79 +200,125 @@ async function createSnapshotForUser(
   const convert = makeConvertToChf(exchangeRates)
 
   const cryptoTickers = itemsWithoutPerpetuals
-    .filter(i => (i as any)?.category === 'Crypto' && typeof (i as any)?.name === 'string')
+    .filter(i => (i as any)?.category === 'Crypto' && typeof (i as any)?.name === 'string' && !i.archived)
     .map(i => String((i as any).name).trim().toUpperCase())
     .filter(Boolean)
-  const uniqueCryptoTickers = [...new Set(cryptoTickers)]
+  const uniqueCryptoTickers = Array.from(new Set<string>(cryptoTickers))
 
   const stockTickers = itemsWithoutPerpetuals
     .filter(i => {
       const c = (i as any)?.category
-      return c === 'Index Funds' || c === 'Stocks' || c === 'Commodities'
+      return !i.archived && (c === 'Index Funds' || c === 'Stocks' || c === 'Commodities')
     })
     .map(i => String((i as any).name || '').trim().toUpperCase())
     .filter(Boolean)
-  const uniqueStockTickers = [...new Set(stockTickers)]
+  const uniqueStockTickers = Array.from(new Set<string>(stockTickers))
 
-  const { prices: cryptoPrices, usdToChfRate } = await fetchCryptoData(
+  const cryptoFetch = await fetchCryptoDataForSnapshot(
     uniqueCryptoTickers,
     process.env.CRYPTOCOMPARE_API_KEY
-  ).catch(() => ({
-    prices: {} as Record<string, number>,
-    usdToChfRate: null as number | null,
-  }))
+  )
+  const cryptoPrices = cryptoFetch.prices
   const fxUsdPerChf = exchangeRates.rates['USD']
   const fallbackUsdToChf = (typeof fxUsdPerChf === 'number' && Number.isFinite(fxUsdPerChf) && fxUsdPerChf > 0)
     ? (1 / fxUsdPerChf)
     : null
-  const effectiveUsdToChf = (usdToChfRate && usdToChfRate > 0) ? usdToChfRate : fallbackUsdToChf
+  const effectiveUsdToChf = (cryptoFetch.usdToChfRate && cryptoFetch.usdToChfRate > 0)
+    ? cryptoFetch.usdToChfRate
+    : fallbackUsdToChf
 
-  const stockPrices = uniqueStockTickers.length > 0
-    ? await fetchStockPrices(uniqueStockTickers).catch(() => ({}))
-    : {}
+  let stockPrices: Record<string, number> = {}
+  if (uniqueStockTickers.length > 0) {
+    try {
+      stockPrices = await fetchStockPrices(uniqueStockTickers)
+    } catch (error) {
+      console.error('[Snapshot] Stock price fetch failed:', error)
+      stockPrices = {}
+    }
+  }
 
   const perpItems: NetWorthItem[] = []
+  let hyperliquidFetchFailed = false
+  let mexcFetchFailed = false
 
   if (apiKeys?.hyperliquidWalletAddress) {
     const walletAddress = apiKeys.hyperliquidWalletAddress || ''
     if (walletAddress) {
-      const exchangeBalance = await fetchHyperliquidAccountEquity(walletAddress).catch(() => [])
-      perpItems.push({
-        id: 'perpetuals-hyperliquid',
-        category: 'Perpetuals',
-        name: 'Hyperliquid',
-        platform: 'Hyperliquid',
-        currency: 'USD',
-        perpetualsData: { exchangeBalance, openPositions: [], openOrders: [] },
-      } as any)
+      try {
+        const exchangeBalance = await fetchHyperliquidAccountEquity(walletAddress)
+        perpItems.push({
+          id: 'perpetuals-hyperliquid',
+          category: 'Perpetuals',
+          name: 'Hyperliquid',
+          platform: 'Hyperliquid',
+          currency: 'USD',
+          perpetualsData: { exchangeBalance, openPositions: [], openOrders: [] },
+        } as any)
+      } catch (error) {
+        console.error('[Snapshot] Hyperliquid fetch failed:', error)
+        hyperliquidFetchFailed = true
+      }
     }
   }
 
   if (apiKeys?.mexcApiKey && apiKeys?.mexcSecretKey) {
-    const mexcEquityUsd = await fetchMexcAccountEquityUsd(
-      apiKeys.mexcApiKey,
-      apiKeys.mexcSecretKey,
-    ).catch(() => null)
+    try {
+      const mexcEquityUsd = await fetchMexcAccountEquityUsd(
+        apiKeys.mexcApiKey,
+        apiKeys.mexcSecretKey,
+      )
 
-    const mexcExchangeBalance = mexcEquityUsd !== null && mexcEquityUsd > 0
-      ? [{ id: 'mexc-account-equity', item: 'MEXC', holdings: mexcEquityUsd, platform: 'MEXC' }]
-      : []
+      const mexcExchangeBalance = mexcEquityUsd !== null && mexcEquityUsd > 0
+        ? [{ id: 'mexc-account-equity', item: 'MEXC', holdings: mexcEquityUsd, platform: 'MEXC' }]
+        : []
 
-    perpItems.push({
-      id: 'perpetuals-mexc',
-      category: 'Perpetuals',
-      name: 'MEXC',
-      platform: 'MEXC',
-      currency: 'USD',
-      perpetualsData: {
-        exchangeBalance: mexcExchangeBalance,
-        openPositions: [],
-        openOrders: [],
-      },
-    } as any)
+      perpItems.push({
+        id: 'perpetuals-mexc',
+        category: 'Perpetuals',
+        name: 'MEXC',
+        platform: 'MEXC',
+        currency: 'USD',
+        perpetualsData: {
+          exchangeBalance: mexcExchangeBalance,
+          openPositions: [],
+          openOrders: [],
+        },
+      } as any)
+    } catch (error) {
+      console.error('[Snapshot] MEXC fetch failed:', error)
+      mexcFetchFailed = true
+    }
   }
 
   const items = perpItems.length > 0 ? [...itemsWithoutPerpetuals, ...perpItems] : itemsWithoutPerpetuals
+
+  const validation = validateSnapshotPrices({
+    items,
+    cryptoPrices,
+    stockPrices,
+    effectiveUsdToChf,
+    apiKeys,
+    hyperliquidFetchFailed,
+    mexcFetchFailed,
+    cryptoFetchError: cryptoFetch.error,
+  })
+
+  if (validation.ok === false) {
+    const missingTickers = [...validation.missingCrypto, ...validation.missingStocks]
+    await writeSnapshotMeta(uid, db, {
+      lastDate: date,
+      lastStatus: 'skipped_no_live_prices',
+      lastAttemptAt: attemptedAt,
+      lastError: validation.reason,
+      missingTickers: missingTickers.length > 0 ? missingTickers : undefined,
+    })
+    return {
+      uid,
+      date,
+      status: 'skipped_no_live_prices',
+      error: validation.reason,
+    }
+  }
 
   const result = NetWorthCalculationService.calculateTotals(
     items,
@@ -264,14 +342,24 @@ async function createSnapshotForUser(
     })),
   }
 
-  const snapshot = summaryToSnapshot(summary)
-  snapshot.date = date
-  snapshot.timestamp = timestamp
+  const snapshotBase = summaryToSnapshot(summary)
+  const snapshot: NetWorthSnapshot = {
+    ...snapshotBase,
+    date,
+    timestamp,
+    priceQuality: 'live',
+  }
 
   const snapshotRef = db.collection(`users/${uid}/snapshots`).doc(snapshot.date)
   await snapshotRef.set(snapshot)
 
-  return { uid, date, status: 'created' }
+  await writeSnapshotMeta(uid, db, {
+    lastDate: date,
+    lastStatus: 'created',
+    lastAttemptAt: attemptedAt,
+  })
+
+  return { uid, date, status: 'created', replacedDegraded: replacedDegraded || undefined }
 }
 
 async function getAllUserUids(): Promise<string[]> {
@@ -285,6 +373,23 @@ async function getAllUserUids(): Promise<string[]> {
   return uids
 }
 
+function snapshotResultMessage(result: SnapshotResult): string {
+  switch (result.status) {
+    case 'created':
+      return result.replacedDegraded
+        ? `Snapshot for ${result.date} created (replaced degraded snapshot)`
+        : 'Snapshot created successfully'
+    case 'exists':
+      return `Snapshot already exists for ${result.date}, skipping creation`
+    case 'skipped_no_live_prices':
+      return result.error || `Snapshot for ${result.date} skipped — live prices unavailable`
+    case 'error':
+      return result.error || 'Snapshot creation failed'
+    default:
+      return 'Snapshot request completed'
+  }
+}
+
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== 'GET' && req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed. Use GET (cron) or POST (authenticated).' })
@@ -294,7 +399,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     initializeAdmin()
     const db = getDb()
 
-    // GET = Vercel cron: create snapshots for all users
     if (req.method === 'GET') {
       if (!verifyCronSecret(req)) {
         return res.status(401).json({ error: 'Invalid cron secret.' })
@@ -310,11 +414,23 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         try {
           results.push(await createSnapshotForUser(uid, db))
         } catch (err) {
+          const date = getSnapshotDateAndTimestamp().date
+          const errorMessage = err instanceof Error ? err.message : 'Unknown error'
+          try {
+            await writeSnapshotMeta(uid, db, {
+              lastDate: date,
+              lastStatus: 'error',
+              lastAttemptAt: Date.now(),
+              lastError: errorMessage,
+            })
+          } catch (metaErr) {
+            console.error('[Snapshot] Failed to write error snapshotMeta:', metaErr)
+          }
           results.push({
             uid,
             date: '',
             status: 'error',
-            error: err instanceof Error ? err.message : 'Unknown error',
+            error: errorMessage,
           })
         }
       }
@@ -322,22 +438,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(200).json({ success: true, results })
     }
 
-    // POST = authenticated user: create snapshot for the calling user
     const uid = await verifyFirebaseAuth(req, res)
     if (!uid) return
 
-    try {
-      const result = await createSnapshotForUser(uid, db)
-      return res.status(200).json({
-        success: true,
-        message: result.status === 'created'
-          ? 'Snapshot created successfully'
-          : `Snapshot already exists for ${result.date}, skipping creation`,
-        snapshot: { date: result.date },
-      })
-    } catch (err) {
-      throw err
-    }
+    const result = await createSnapshotForUser(uid, db)
+    return res.status(200).json({
+      success: result.status === 'created' || result.status === 'exists',
+      message: snapshotResultMessage(result),
+      snapshot: { date: result.date },
+      status: result.status,
+      error: result.error,
+    })
   } catch (error) {
     console.error('[Snapshot] Error creating snapshot:', error)
 

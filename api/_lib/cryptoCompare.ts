@@ -33,6 +33,143 @@ function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
+function isRateLimitError(error: unknown, status?: number): boolean {
+  if (status === 429) return true
+  const message = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase()
+  return message.includes('rate limit')
+}
+
+async function fetchCryptoPricesStrict(
+  tickers: string[],
+  apiKey: string
+): Promise<{ prices: Record<string, number>; error?: string; rateLimited?: boolean }> {
+  const normalizedTickers = [...new Set(tickers.map(normalizeTicker))]
+  if (normalizedTickers.length === 0) {
+    return { prices: {} }
+  }
+
+  const tickerString = normalizedTickers.join(',')
+  const retryDelaysMs = [0, 2000, 5000]
+  let lastError: string | undefined
+  let rateLimited = false
+
+  for (let attempt = 0; attempt < retryDelaysMs.length; attempt++) {
+    if (retryDelaysMs[attempt] > 0) {
+      await delay(retryDelaysMs[attempt])
+    }
+
+    try {
+      const response = await fetch(
+        buildCryptoCompareUrl(`/data/pricemulti?fsyms=${tickerString}&tsyms=USD`, apiKey),
+        { method: 'GET', headers: { Accept: 'application/json' } }
+      )
+
+      if (!response.ok) {
+        if (response.status === 401) {
+          console.error('[cryptoCompare] API returned 401 — check CRYPTOCOMPARE_API_KEY')
+        }
+        const err = new Error(`CryptoCompare API returned ${response.status}`)
+        if (isRateLimitError(err, response.status) && attempt < retryDelaysMs.length - 1) {
+          rateLimited = true
+          lastError = err.message
+          continue
+        }
+        throw err
+      }
+
+      const data = await response.json()
+      assertCryptoCompareOk(data)
+
+      const prices: Record<string, number> = {}
+      for (const ticker of normalizedTickers) {
+        if (data[ticker] && typeof data[ticker].USD === 'number') {
+          prices[ticker] = data[ticker].USD
+        }
+      }
+      return { prices }
+    } catch (error) {
+      lastError = error instanceof Error ? error.message : 'CryptoCompare API error'
+      rateLimited = isRateLimitError(error)
+      if (rateLimited && attempt < retryDelaysMs.length - 1) {
+        console.warn(`[cryptoCompare] Rate limited, retrying (attempt ${attempt + 1})`)
+        continue
+      }
+      console.error('Error fetching crypto prices from CryptoCompare:', error)
+      return { prices: {}, error: lastError, rateLimited }
+    }
+  }
+
+  return { prices: {}, error: lastError || 'CryptoCompare API error', rateLimited }
+}
+
+async function fetchUsdToChfRateStrict(
+  apiKey: string
+): Promise<{ rate: number | null; error?: string }> {
+  try {
+    const response = await fetch(
+      buildCryptoCompareUrl('/data/price?fsym=USD&tsyms=CHF', apiKey),
+      { method: 'GET', headers: { Accept: 'application/json' } }
+    )
+
+    if (!response.ok) {
+      throw new Error(`CryptoCompare API returned ${response.status}`)
+    }
+
+    const data = await response.json()
+    assertCryptoCompareOk(data)
+
+    if (data.CHF && typeof data.CHF === 'number' && data.CHF > 0) {
+      return { rate: data.CHF }
+    }
+
+    throw new Error('Invalid response format from CryptoCompare API')
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Failed to fetch USD/CHF rate'
+    console.error('Error fetching USD to CHF rate from CryptoCompare:', error)
+    return { rate: null, error: message }
+  }
+}
+
+export async function fetchCryptoDataForSnapshot(
+  tickers: string[],
+  apiKey?: string
+): Promise<{
+  prices: Record<string, number>
+  usdToChfRate: number | null
+  error?: string
+  rateLimited?: boolean
+}> {
+  if (!apiKey) {
+    return {
+      prices: {},
+      usdToChfRate: null,
+      error: 'CRYPTOCOMPARE_API_KEY not configured',
+    }
+  }
+
+  const priceResult = await fetchCryptoPricesStrict(tickers, apiKey)
+  if (priceResult.error) {
+    return {
+      prices: priceResult.prices,
+      usdToChfRate: null,
+      error: priceResult.error,
+      rateLimited: priceResult.rateLimited,
+    }
+  }
+
+  await delay(1100)
+  const fxResult = await fetchUsdToChfRateStrict(apiKey)
+  if (fxResult.error) {
+    console.warn('[cryptoCompare] USD/CHF from CryptoCompare failed, caller may use FX fallback:', fxResult.error)
+  }
+
+  return {
+    prices: priceResult.prices,
+    usdToChfRate: fxResult.rate,
+    error: undefined,
+  }
+}
+
 export async function fetchCryptoPrices(
   tickers: string[],
   apiKey?: string

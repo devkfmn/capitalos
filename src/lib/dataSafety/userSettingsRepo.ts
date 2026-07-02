@@ -26,6 +26,7 @@
 import { doc, getDoc, updateDoc, setDoc, deleteField } from 'firebase/firestore'
 import { db } from '../../config/firebase'
 import { safeWrite } from './repository'
+import type { SnapshotMeta } from '../../services/snapshotService'
 
 /**
  * Canonical Firestore path for user settings
@@ -44,6 +45,7 @@ export interface UserSettingsData {
   baseCurrency: string | null
   apiKeys: ApiKeys | null
   themeId: string | null
+  snapshotMeta: SnapshotMeta | null
 }
 
 /**
@@ -83,6 +85,7 @@ export async function loadUserSettings(uid: string): Promise<UserSettingsData | 
       baseCurrency: data?.baseCurrency || null,
       apiKeys: data?.apiKeys || null,
       themeId: data?.themeId || null,
+      snapshotMeta: (data?.snapshotMeta as SnapshotMeta | undefined) || null,
     }
   } catch (error) {
     console.error('[UserSettingsRepo] Error loading settings:', error)

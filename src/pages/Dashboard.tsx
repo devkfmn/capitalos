@@ -20,6 +20,7 @@ import { useAuth } from '../lib/dataSafety/authGateCompat'
 import { useIncognito } from '../contexts/IncognitoContext'
 import { useData } from '../contexts/DataContext'
 import MarketDataWarningBanner from '../components/MarketDataWarningBanner'
+import SnapshotWarningBanner from '../components/SnapshotWarningBanner'
 import { formatMoney } from '../lib/currency'
 import { formatDate } from '../lib/dateFormat'
 import type { NetWorthSnapshot } from '../services/snapshotService'
@@ -992,6 +993,7 @@ function Dashboard() {
         <Heading level={1}>Dashboard</Heading>
 
         <MarketDataWarningBanner />
+        <SnapshotWarningBanner />
         
         {/* Total Net Worth, Performance, Monthly Cashflow — mobile: TNW, Perf, MC; desktop: TNW+MC row, then Perf */}
         <div className="flex flex-col gap-6 md:grid md:grid-cols-2">
